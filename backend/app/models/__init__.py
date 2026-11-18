@@ -1,4 +1,3 @@
-
 from app.models.user import User
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -9,19 +8,13 @@ from app.models.handoff import Handoff
 from app.models.student import StudentProfile
 from app.models.schedule import ClassSchedule
 from app.models.payment import StudentInvoice, StudentPayment
-
+from app.models.attendance import AttendanceRecord
+from app.models.student_request import StudentRequest
+from app.models.appointment import Appointment, AppointmentSlot
 
 __all__ = [
-    "User",
-    "Conversation",
-    "Message",
-    "Document",
-    "DocumentChunk",
-    "Program",
-    "ApplicantLead",
-    "Handoff",
-    "StudentProfile",
-    "ClassSchedule",
-    "StudentInvoice",
-    "StudentPayment",
+    "User", "Conversation", "Message", "Document", "DocumentChunk",
+    "Program", "ApplicantLead", "Handoff", "StudentProfile", "ClassSchedule",
+    "StudentInvoice", "StudentPayment", "AttendanceRecord", "StudentRequest",
+    "Appointment", "AppointmentSlot",
 ]
