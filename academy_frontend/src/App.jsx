@@ -8,17 +8,17 @@ import { auth, chats, clearToken, downloadDocument, saveToken, token } from './a
 const dateLabel = (v) =>
   new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
+const asArray = (v) => (Array.isArray(v) ? v : []);
+
 // Matches [Source 1], [Source 1, page 3] and the 【 】 variants.
 const pattern = /[\[【]Source\s+(\d+)(?:,\s*page\s+([^\]】]+))?[\]】]/gi;
 
-
-function CitationText({ content = '', sources = [], onDownload, downloading }) {
-  const safeSources = Array.isArray(sources) ? sources : [];
-
+function CitationText({ content, sources, onDownload, downloading }) {
+  const text = content ?? '';
   const sourceMap = new Map(
-    safeSources.map((source, index) => [
+    asArray(sources).map((source, index) => [
       String(source.source_id ?? index + 1),
-      source
+      source,
     ])
   );
 
@@ -28,9 +28,9 @@ function CitationText({ content = '', sources = [], onDownload, downloading }) {
 
   pattern.lastIndex = 0;
 
-  while ((match = pattern.exec(content || '')) !== null) {
+  while ((match = pattern.exec(text)) !== null) {
     if (match.index > last) {
-      parts.push(content.slice(last, match.index));
+      parts.push(text.slice(last, match.index));
     }
 
     const source = sourceMap.get(match[1]);
@@ -57,13 +57,12 @@ function CitationText({ content = '', sources = [], onDownload, downloading }) {
     last = pattern.lastIndex;
   }
 
-  if (last < (content || '').length) {
-    parts.push(content.slice(last));
+  if (last < text.length) {
+    parts.push(text.slice(last));
   }
 
   return <>{parts}</>;
 }
-
 
 function AuthScreen({ onLogin }) {
   const [step, setStep] = useState('email');
@@ -279,7 +278,7 @@ export default function App() {
     setError('');
     try {
       const list = await chats.messages(id);
-      if (req === openRequest.current) setMessages(list);
+      if (req === openRequest.current) setMessages(asArray(list));
     } catch (e) {
       if (req === openRequest.current) setError(e.message);
     } finally {
@@ -292,7 +291,7 @@ export default function App() {
     if (!user) return;
     (async () => {
       try {
-        const list = await chats.list();
+        const list = asArray(await chats.list());
         setItems(list);
         if (list[0]) await open(list[0].id);
       } catch (e) {
@@ -357,7 +356,7 @@ export default function App() {
           id: crypto.randomUUID(),
           sender: 'assistant',
           content: result.answer,
-          sources: result.sources || [],
+          sources: asArray(result.sources),
           created_at: new Date().toISOString(),
           handoff_required: result.handoff_required,
         },
@@ -372,7 +371,7 @@ export default function App() {
 
     // Refresh only the sidebar (titles, order). Do not reload the thread.
     try {
-      setItems(await chats.list());
+      setItems(asArray(await chats.list()));
     } catch {
       /* the sidebar can stay stale, the message already went through */
     }
@@ -481,24 +480,27 @@ export default function App() {
                   <div
                     key={c.id}
                     className={`history-item ${active === c.id ? 'selected' : ''}`}
+                    role="button"
+                    tabIndex="0"
+                    onClick={() => open(c.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') open(c.id);
+                    }}
                   >
-                    <button
-                      type="button"
-                      className="history-open"
-                      onClick={() => open(c.id)}
-                    >
-                      <MessageCircle size={16} />
-                      <span>
-                        <b>{c.title || 'New conversation'}</b>
-                        <small>{dateLabel(c.created_at)}</small>
-                      </span>
-                    </button>
+                    <MessageCircle size={16} />
+                    <span>
+                      <b>{c.title || 'New conversation'}</b>
+                      <small>{dateLabel(c.created_at)}</small>
+                    </span>
                     <button
                       className="delete-chat"
                       type="button"
                       title="Delete conversation"
                       aria-label={`Delete ${c.title || 'conversation'}`}
-                      onClick={() => removeConversation(c.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeConversation(c.id);
+                      }}
                     >
                       <Trash2 size={14} />
                     </button>
