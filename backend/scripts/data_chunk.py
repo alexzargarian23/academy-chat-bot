@@ -1,7 +1,22 @@
-
 #!/usr/bin/env python3
+"""
+Index the ten Academy source documents into Neon with Gemini embeddings.
+
+Run from the project root with the project's virtualenv:
+  .venv/bin/python backend/scripts/data_chunk.py                       (all listed files)
+  .venv/bin/python backend/scripts/data_chunk.py "Picsart courses en.docx"   (only that file)
+
+For each listed file the script:
+  - extracts and chunks the text,
+  - generates Gemini embeddings in batches,
+  - updates the existing documents row (or creates it if missing),
+  - replaces only that document's chunks.
+
+Nothing is written to the database until you type the confirmation text.
+"""
 
 from __future__ import annotations
+
 import os
 import sys
 from pathlib import Path
@@ -53,12 +68,15 @@ CHUNK_WORDS = 350
 CHUNK_OVERLAP = 50
 BATCH_SIZE = 16
 
-CONFIRMATION_TEXT = "RE-EMBED NINE DOCUMENTS"
+CONFIRMATION_TEXT = "RE-EMBED DOCUMENTS"
 
 
 # --------------------------------------------------
 # DOCUMENT LIST
 # --------------------------------------------------
+# Files are looked up in SOURCE_DIR unless the entry has its own "path".
+# Visibility must be one of: public, student, staff, admin.
+# ("public" is what guests can see.)
 
 DOCUMENTS = [
     {
@@ -114,6 +132,13 @@ DOCUMENTS = [
         "title": "The Intern Engineer’s Field Guide",
         "language": "en",
         "visibility": "student",
+    },
+    {
+        "filename": "Picsart courses en.docx",
+        "path": Path("/Users/alex/Desktop/Picsart courses en.docx"),
+        "title": "Picsart Courses — English",
+        "language": "en",
+        "visibility": "public",
     },
 ]
 
@@ -323,19 +348,54 @@ def main():
         )
 
     # ----------------------------------------------
-    # VERIFY ALL NINE FILES EXIST
+    # CHOOSE WHICH DOCUMENTS TO PROCESS
+    # ----------------------------------------------
+    # No arguments = every document in DOCUMENTS.
+    # With arguments = only those filenames (exact match).
+
+    documents = DOCUMENTS
+
+    if len(sys.argv) > 1:
+        # An argument can be a filename ("Picsart courses en.docx")
+        # or the full path of a file listed in DOCUMENTS.
+        wanted = set(sys.argv[1:])
+
+        def matches(item: dict, argument: str) -> bool:
+            if argument == item["filename"]:
+                return True
+            path = item.get("path")
+            return path is not None and argument == str(path)
+
+        unknown = [
+            argument for argument in wanted
+            if not any(matches(item, argument) for item in DOCUMENTS)
+        ]
+
+        if unknown:
+            print("These arguments are not in DOCUMENTS (filename or path):")
+            for name in sorted(unknown):
+                print(f"  - {name}")
+            raise SystemExit("No database changes were made.")
+
+        documents = [
+            item for item in DOCUMENTS
+            if any(matches(item, argument) for argument in wanted)
+        ]
+
+    # ----------------------------------------------
+    # VERIFY ALL FILES EXIST
     # ----------------------------------------------
 
     files = []
     missing = []
 
-    for item in DOCUMENTS:
-        path = SOURCE_DIR / item["filename"]
+    for item in documents:
+        path = item.get("path", SOURCE_DIR / item["filename"])
 
         if path.is_file():
             files.append((item, path))
         else:
-            missing.append(item["filename"])
+            missing.append(str(path))
 
     if missing:
         print("Missing files:")
@@ -450,9 +510,11 @@ def main():
         print(f"  Dimensions: {EMBEDDING_DIMENSION}")
 
         print(
-            "\nOnly the nine listed documents and their chunks "
-            "will be updated."
+            f"\nOnly these {len(extracted)} document(s) and their chunks "
+            "will be updated:"
         )
+        for item, _, _ in extracted:
+            print(f"  - {item['filename']}")
 
         confirmation = input(
             f'\nType exactly "{CONFIRMATION_TEXT}" to continue: '
@@ -554,7 +616,7 @@ def main():
                         )
                     )
 
-            # Commit all nine document updates together.
+            # Commit all document updates together.
             session.commit()
 
         print("\nIndexing completed successfully!")
