@@ -1,6 +1,6 @@
 """Groq orchestration for the Academy chatbot (token-optimized)."""
 from __future__ import annotations
-
+from app.services.retrieval_service import search_knowledge
 import json
 import logging
 import os
@@ -392,7 +392,51 @@ def _tool_message_content(result: dict) -> str:
         {"result": payload[:MAX_TOOL_RESULT_CHARS], "truncated": True},
         ensure_ascii=False,
     )
+def retrieve_sources(question: str, db: Session, user: User) -> tuple[list[dict], str]:
+    """
+    Retrieve relevant Academy documents before calling Groq.
+    The backend, not the LLM, controls source IDs and metadata.
+    """
+    try:
+        results = search_knowledge(
+            question=question,
+            db=db,
+            user_role=user.role,
+            limit=5,
+            min_similarity=0.55,
+        )
+    except Exception:
+        logger.exception("Knowledge retrieval failed")
+        return [], ""
 
+    sources = []
+    context_parts = []
+
+    for index, item in enumerate(results, start=1):
+        source = {
+            "source_id": index,
+            "document_id": item["document_id"],
+            "document_title": item["document_title"],
+            "chunk_id": item["chunk_id"],
+            "page_number": item["page_number"],
+            "similarity": item["similarity"],
+        }
+        sources.append(source)
+
+        page_text = (
+            f", page {item['page_number']}"
+            if item["page_number"] is not None
+            else ""
+        )
+
+        context_parts.append(
+            f"[Source {index}: {item['document_title']}{page_text}]\n"
+            f"{item['content']}"
+        )
+
+    context = "\n\n".join(context_parts)
+
+    return sources, context
 
 def run_assistant(
     question: str,
@@ -406,10 +450,34 @@ def run_assistant(
         history,
         question,
     )
+    sources, retrieved_context = retrieve_sources(
+        question,
+        db,
+        user,
+    )
 
-    messages = _history_to_messages(history, question, user.role)
+    messages = _history_to_messages(
+        history,
+        question,
+        user.role,
+    )
 
-    sources: list[dict] = []
+    if retrieved_context:
+        messages.append({
+            "role": "system",
+            "content": (
+                    "RETRIEVED ACADEMY DOCUMENTS:\n"
+                    "The following passages were retrieved by the backend. "
+                    "Use them as evidence for relevant Academy questions. "
+                    "Cite sources using exactly the supplied [Source N] labels. "
+                    "Do not invent source numbers or page numbers. "
+                    "If the passages do not support an answer, say that "
+                    "the information cannot be verified. "
+                    "Do not use these documents to answer personal student "
+                    "record questions.\n\n"
+                    + retrieved_context
+            ),
+        })
     action_results: list[dict] = []
 
     handoff_required = False
@@ -527,17 +595,23 @@ def run_assistant(
                     if name == "search_academy_knowledge":
                         knowledge_search_attempted = True
 
-                        for item in result.get("results", []):
-                            source_id = len(sources) + 1
+                        # Only build sources from the tool if pre-retrieval
+                        # did not already provide them.
+                        if not sources:
+                            for index, item in enumerate(
+                                    result.get("results", []),
+                                    start=1,
+                            ):
+                                sources.append({
+                                    "source_id": index,
+                                    "document_id": item["document_id"],
+                                    "document_title": item["title"],
+                                    "chunk_id": item.get("chunk_id"),
+                                    "page_number": item["page"],
+                                    "similarity": item["similarity"],
+                                })
 
-                            sources.append({
-                                "source_id": source_id,
-                                "document_id": item["document_id"],
-                                "document_title": item["title"],
-                                "chunk_id": item.get("chunk_id"),
-                                "page_number": item.get("page"),
-                                "similarity": item.get("similarity"),
-                            })
+                        grounded = grounded or bool(sources)
 
                     if name in {
                         "book_appointment",
