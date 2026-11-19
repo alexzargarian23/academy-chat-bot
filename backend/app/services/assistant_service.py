@@ -76,8 +76,21 @@ For students, profile, schedule, payment, attendance, or request questions must 
 STAFF RECORD ACCESS:
 Staff and administrators may search students and retrieve another student's schedule, payment status, or grades using the staff-only tools. Search for a student first when the identity is unclear. Never expose private student records to students, guests, or unauthenticated users.
 
-LEAD GENERATION:
-Every newly registered student account already has one linked lead. When a user expresses genuine interest in enrolling, ask naturally which program they are interested in, collect a phone number if needed, and ask explicitly whether admissions staff may contact them. Do not pressure the user. Do not invent details or assume consent. After the user provides the details and clearly agrees to be contacted, call capture_applicant_interest to update the existing lead. The lead may be marked qualified only when explicit contact consent, a phone number, and program or interest details are present. Do not create a duplicate lead. If the user does not consent, do not mark the lead qualified.
+LEAD GENERATION (INCLUDING GUESTS):
+Guests may express interest in enrolling. This is an allowed Academy conversation. Never reject enrollment interest because the user is a guest or because no knowledge-base search was performed.
+
+When a user expresses interest:
+1. Ask which Academy program they are interested in.
+2. Ask for their phone number if they have not provided it.
+3. Explicitly ask whether they agree to be contacted by the Academy admissions team.
+
+Ask one question at a time. Use conversation history to remember the information already provided. Do not ask for the same information again.
+
+Do not pressure the user or assume consent. Only call capture_applicant_interest after the user has provided program or interest details, a phone number, and explicit contact consent.
+
+If the user declines contact, do not mark the lead qualified.
+
+A lead may not exist yet. The capture_applicant_interest tool can create one if necessary. Guests do not need to log in to express interest.
 
 ACTIONS:
 Only create a student request when the student clearly asks to submit one. Only book an appointment after the student explicitly confirms a specific available slot. Only cancel when explicitly requested. Never claim an action happened unless its tool reports success.
@@ -156,7 +169,28 @@ def _is_smalltalk(question: str) -> bool:
         normalized,
     ))
 
+def _is_lead_generation_context(
+    history: list[dict[str, str]],
+    question: str,
+) -> bool:
+    """Detect enrollment-interest messages and their follow-up replies."""
 
+    text = " ".join(
+        [item.get("content", "") for item in history[-6:]]
+        + [question]
+    ).lower()
+
+    patterns = [
+        r"\b(interested|enroll|enrolling|admission|joining|"
+        r"join the academy|apply|application)\b",
+        r"\b(which program|what program|phone number|"
+        r"contact you|admissions team|agree to be contacted)\b",
+        r"(հետաքրքրված եմ|ընդունվել|հեռախոսահամար)",
+        r"(хочу поступить|поступление|номер телефона|"
+        r"какую программу|связаться с вами)",
+    ]
+
+    return any(re.search(pattern, text, re.I) for pattern in patterns)
 def _tool_result_is_grounded(name: str, result: dict) -> bool:
     if name == "search_academy_knowledge":
         return bool(result.get("results"))
@@ -272,9 +306,12 @@ def run_assistant(
     conversation: Conversation,
     history: list[dict[str, str]],
 ) -> dict:
+    lead_generation_context = _is_lead_generation_context(
+        history,
+        question,
+    )
 
     messages = _history_to_messages(history, question, user.role)
-
     sources: list[dict] = []
     action_results: list[dict] = []
     handoff_required = False
@@ -301,7 +338,11 @@ def run_assistant(
                     "Groq returned an empty answer"
                 )
 
-            if not grounded and not handoff_required:
+            if (
+                    not grounded
+                    and not handoff_required
+                    and not lead_generation_context
+            ):
                 return {
                     "answer": SMALLTALK_RESPONSE if _is_smalltalk(question) else NO_GROUNDED_ANSWER,
                     "sources": [],
@@ -419,8 +460,12 @@ def run_assistant(
                 ),
             })
 
-        if knowledge_search_attempted and not grounded and not handoff_required:
-            return {
+        if (
+                knowledge_search_attempted
+                and not grounded
+                and not handoff_required
+                and not lead_generation_context
+        ):            return {
                 "answer": NO_GROUNDED_ANSWER,
                 "sources": [],
                 "handoff_required": False,
