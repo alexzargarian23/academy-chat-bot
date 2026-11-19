@@ -42,8 +42,8 @@ ALLOWED_LANGUAGES = {"en", "hy", "ru"}
 ALLOWED_STATUSES = {"pending", "processing", "completed", "failed"}
 ROLE_DOCUMENT_VISIBILITY = {
     "admin": ALLOWED_VISIBILITY,
-    "staff": {"public", "staff"},
-    "student": {"public", "student"},
+    "staff": ALLOWED_VISIBILITY,
+    "student": ALLOWED_VISIBILITY,
 }
 
 
