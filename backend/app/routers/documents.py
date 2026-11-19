@@ -12,6 +12,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -39,6 +40,11 @@ ALLOWED_EXTENSIONS = {
 ALLOWED_VISIBILITY = {"public", "student", "staff", "admin"}
 ALLOWED_LANGUAGES = {"en", "hy", "ru"}
 ALLOWED_STATUSES = {"pending", "processing", "completed", "failed"}
+ROLE_DOCUMENT_VISIBILITY = {
+    "admin": ALLOWED_VISIBILITY,
+    "staff": {"public", "staff"},
+    "student": {"public", "student"},
+}
 
 
 def require_document_manager(user: User):
@@ -47,6 +53,10 @@ def require_document_manager(user: User):
             status_code=403,
             detail="Staff or admin access required",
         )
+
+
+def _allowed_visibility_for(user: User) -> set[str]:
+    return ROLE_DOCUMENT_VISIBILITY.get(user.role, set())
 
 
 def get_accessible_document(
@@ -58,9 +68,10 @@ def get_accessible_document(
         Document.id == document_id
     )
 
-    # Staff cannot manage documents reserved for administrators.
-    if current_user.role != "admin":
-        query = query.filter(Document.visibility != "admin")
+    allowed_visibility = _allowed_visibility_for(current_user)
+    if not allowed_visibility:
+        raise HTTPException(status_code=403, detail="Document access required")
+    query = query.filter(Document.visibility.in_(allowed_visibility))
 
     document = query.first()
 
@@ -256,8 +267,8 @@ def list_documents(
 
     query = db.query(Document)
 
-    if current_user.role != "admin":
-        query = query.filter(Document.visibility != "admin")
+    allowed_visibility = _allowed_visibility_for(current_user)
+    query = query.filter(Document.visibility.in_(allowed_visibility))
 
     if search and search.strip():
         search_term = f"%{search.strip()}%"
@@ -283,10 +294,10 @@ def list_documents(
                 detail="Invalid document visibility",
             )
 
-        if current_user.role != "admin" and visibility == "admin":
+        if visibility not in allowed_visibility:
             raise HTTPException(
                 status_code=403,
-                detail="You cannot view admin-only documents",
+                detail="You cannot view documents with this visibility",
             )
 
         query = query.filter(Document.visibility == visibility)
@@ -340,6 +351,52 @@ def get_document(
     )
 
     return serialize_document(document)
+
+
+def _document_file_response(document: Document, disposition: str) -> FileResponse:
+    if not document.storage_filename:
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    file_path = (UPLOAD_DIR / document.storage_filename).resolve()
+    if file_path.parent != UPLOAD_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid stored document path")
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    media_type = ALLOWED_EXTENSIONS.get(
+        file_path.suffix.lower(),
+        "application/octet-stream",
+    )
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        filename=document.original_filename,
+        content_disposition_type=disposition,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/{document_id}/download", response_class=FileResponse)
+def download_document_file(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    document = get_accessible_document(document_id, db, current_user)
+    return _document_file_response(document, "attachment")
+
+
+@router.get("/{document_id}/preview", response_class=FileResponse)
+def preview_document_file(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    document = get_accessible_document(document_id, db, current_user)
+    return _document_file_response(document, "inline")
 
 
 # ---------------------------------------------------------

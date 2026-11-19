@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
-from app.models import User, StudentProfile
+from app.models import User, StudentProfile, ApplicantLead
 from app.models.appointment import Appointment, AppointmentSlot
 from app.schemas.appointment import AppointmentSlotCreate, AppointmentBook, AppointmentStaffUpdate
 
@@ -26,9 +26,13 @@ def slot_dict(slot: AppointmentSlot):
             "location": slot.location, "status": slot.status}
 
 def appointment_dict(item: Appointment):
-    slot = item.slot; student = item.student_profile
-    return {"id": item.id, "slot_id": slot.id, "student_profile_id": student.id,
-            "student_number": student.student_number, "student_name": student.user.full_name,
+    slot = item.slot; student = item.student_profile; lead = item.applicant_lead
+    person_name = student.user.full_name if student and student.user else (lead.full_name if lead else "Unknown applicant")
+    person_email = student.user.email if student and student.user else (lead.email if lead else None)
+    return {"id": item.id, "slot_id": slot.id, "student_profile_id": student.id if student else None,
+            "applicant_lead_id": lead.id if lead else None,
+            "student_number": student.student_number if student else None,
+            "student_name": person_name, "email": person_email,
             "appointment_type": slot.appointment_type, "starts_at": slot.starts_at,
             "ends_at": slot.ends_at, "staff_name": slot.staff.full_name if slot.staff else None,
             "location": slot.location, "status": item.status, "reason": item.reason,
@@ -69,16 +73,22 @@ def list_slots(from_date: datetime | None = None, until: datetime | None = None,
 
 @router.post("/book", response_model=dict, status_code=status.HTTP_201_CREATED)
 def book_slot(data: AppointmentBook, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    student = my_student(db, user)
+    student = db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    lead = db.scalar(select(ApplicantLead).where(ApplicantLead.user_id == user.id))
+    if not student and not lead:
+        raise HTTPException(status_code=404, detail="Applicant record or student profile not found")
     slot = db.scalar(select(AppointmentSlot).where(AppointmentSlot.id == data.slot_id).with_for_update())
     if not slot: raise HTTPException(status_code=404, detail="Appointment slot not found")
     if slot.status != "available" or slot.starts_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="This appointment slot is no longer available")
     slot.status = "booked"
-    item = Appointment(slot_id=slot.id, student_profile_id=student.id, status="booked", reason=data.reason, created_by=user.id)
+    item = Appointment(slot_id=slot.id, student_profile_id=student.id if student else None,
+                       applicant_lead_id=lead.id if lead else None, status="booked",
+                       reason=data.reason, created_by=user.id)
     db.add(item); db.commit(); db.refresh(item)
     item = db.scalar(select(Appointment).options(joinedload(Appointment.slot).joinedload(AppointmentSlot.staff),
-        joinedload(Appointment.student_profile).joinedload(StudentProfile.user)).where(Appointment.id == item.id))
+        joinedload(Appointment.student_profile).joinedload(StudentProfile.user),
+        joinedload(Appointment.applicant_lead)).where(Appointment.id == item.id))
     if item is None:
         raise HTTPException(status_code=500, detail="Appointment could not be loaded after booking")
     return appointment_dict(item)
@@ -93,21 +103,42 @@ def my_appointments(db: Session = Depends(get_db), user: User = Depends(get_curr
 
 @router.post("/{appointment_id}/cancel", response_model=dict)
 def cancel_appointment(appointment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    student = my_student(db, user)
+    student = db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    lead = db.scalar(select(ApplicantLead).where(ApplicantLead.user_id == user.id))
+    if not student and not lead:
+        raise HTTPException(status_code=404, detail="Applicant record or student profile not found")
+    if student:
+        ownership = Appointment.student_profile_id == student.id
+    elif lead:
+        ownership = Appointment.applicant_lead_id == lead.id
+    else:
+        raise HTTPException(status_code=404, detail="Applicant record or student profile not found")
     item = db.scalar(select(Appointment).options(joinedload(Appointment.slot)).where(
-        Appointment.id == appointment_id, Appointment.student_profile_id == student.id).with_for_update())
+        Appointment.id == appointment_id, ownership).with_for_update())
     if not item: raise HTTPException(status_code=404, detail="Appointment not found")
     if item.status != "booked": raise HTTPException(status_code=409, detail="Only booked appointments can be cancelled")
     item.status = "cancelled"; item.slot.status = "available"
     db.commit()
     return {"cancelled": True, "appointment_id": item.id}
 
+@router.get("/applicant/me", response_model=list[dict])
+def applicant_my_appointments(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    lead = db.scalar(select(ApplicantLead).where(ApplicantLead.user_id == user.id))
+    if not lead:
+        raise HTTPException(status_code=404, detail="Applicant record not found")
+    query = select(Appointment).options(
+        joinedload(Appointment.slot).joinedload(AppointmentSlot.staff),
+        joinedload(Appointment.applicant_lead)
+    ).where(Appointment.applicant_lead_id == lead.id).order_by(Appointment.created_at.desc())
+    return [appointment_dict(x) for x in db.scalars(query).unique().all()]
+
 @router.get("/", response_model=list[dict])
 def staff_list_appointments(status_filter: str | None = Query(default=None, alias="status"),
                             db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     staff_only(user)
     query = select(Appointment).options(joinedload(Appointment.slot).joinedload(AppointmentSlot.staff),
-        joinedload(Appointment.student_profile).joinedload(StudentProfile.user))
+        joinedload(Appointment.student_profile).joinedload(StudentProfile.user),
+        joinedload(Appointment.applicant_lead))
     if status_filter:
         if status_filter not in ["booked", "cancelled", "completed", "no_show"]: raise HTTPException(status_code=422, detail="Invalid appointment status")
         query = query.where(Appointment.status == status_filter)
@@ -118,7 +149,8 @@ def staff_update_appointment(appointment_id: int, data: AppointmentStaffUpdate,
                              db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     staff_only(user)
     item = db.scalar(select(Appointment).options(joinedload(Appointment.slot),
-        joinedload(Appointment.student_profile).joinedload(StudentProfile.user)).where(Appointment.id == appointment_id))
+        joinedload(Appointment.student_profile).joinedload(StudentProfile.user),
+        joinedload(Appointment.applicant_lead)).where(Appointment.id == appointment_id))
     if not item: raise HTTPException(status_code=404, detail="Appointment not found")
     updates = data.model_dump(exclude_unset=True)
     if not updates: raise HTTPException(status_code=400, detail="No update fields provided")

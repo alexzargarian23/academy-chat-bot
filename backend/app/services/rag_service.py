@@ -2,7 +2,7 @@
 from sqlalchemy.orm import Session
 
 from app.services.retrieval_service import search_knowledge
-from app.services.gemini_service import generate_response
+from app.services.assistant_service import generate_text_response
 
 
 NO_ANSWER = (
@@ -120,7 +120,7 @@ Write the answer now.
 """
 
     # 7. Generate the answer.
-    answer = generate_response(prompt)
+    answer = generate_text_response(prompt)
 
     # 8. Prepare source metadata.
     sources = [

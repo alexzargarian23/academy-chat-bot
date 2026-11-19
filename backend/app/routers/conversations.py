@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
-from app.models import User, Conversation, Message
+from app.models import User, Conversation, Message, Handoff, ApplicantLead
 from app.schemas.conversation import (
     ConversationCreate,
     ConversationResponse,
@@ -23,8 +23,10 @@ def create_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    lead = db.query(ApplicantLead).filter(ApplicantLead.user_id == current_user.id).first()
     conversation = Conversation(
         user_id=current_user.id,
+        applicant_lead_id=lead.id if lead else None,
         channel=data.channel,
         language=data.language
     )
@@ -64,6 +66,33 @@ def get_conversation(
         )
 
     return conversation
+
+
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id
+    ).first()
+
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
+
+    db.query(Handoff).filter(Handoff.conversation_id == conversation.id).delete(
+        synchronize_session=False
+    )
+    db.query(Message).filter(Message.conversation_id == conversation.id).delete(
+        synchronize_session=False
+    )
+    db.delete(conversation)
+    db.commit()
 
 
 @router.post(

@@ -9,8 +9,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
-    User, StudentProfile, ClassSchedule, StudentInvoice,
-    AttendanceRecord,
+    User, StudentProfile, ClassSchedule, StudentInvoice, ApplicantLead,
+    Program,
+    AttendanceRecord, StudentGrade,
 )
 from app.models.student_request import StudentRequest
 from app.models.appointment import Appointment, AppointmentSlot
@@ -76,6 +77,184 @@ def tool_get_my_schedule(db: Session, user: User, args: dict) -> dict:
         "room": row.room,
         "academic_year": row.academic_year,
     } for row in rows]}
+
+
+def _staff_record_access(user: User) -> dict | None:
+    if user.role not in {"staff", "admin"}:
+        return {"authorized": False, "message": "Staff or administrator access is required."}
+    return None
+
+
+def _staff_student(db: Session, args: dict) -> StudentProfile | None:
+    raw_id = args.get("student_profile_id", args.get("student_id"))
+    if raw_id is None:
+        return None
+    try:
+        student_id = int(str(raw_id))
+    except (TypeError, ValueError):
+        return None
+    return db.scalar(
+        select(StudentProfile)
+        .options(joinedload(StudentProfile.user), joinedload(StudentProfile.program))
+        .where(StudentProfile.id == student_id)
+    )
+
+
+def tool_search_students(db: Session, user: User, args: dict) -> dict:
+    denied = _staff_record_access(user)
+    if denied:
+        return denied
+    term = str(args.get("query", "")).strip()
+    if len(term) < 2:
+        return {"students": [], "message": "Provide at least two characters of a name, email, or student number."}
+    search_term = f"%{term}%"
+    rows = db.scalars(
+        select(StudentProfile)
+        .join(User, StudentProfile.user_id == User.id)
+        .options(joinedload(StudentProfile.user), joinedload(StudentProfile.program))
+        .where(
+            User.full_name.ilike(search_term)
+            | User.email.ilike(search_term)
+            | StudentProfile.student_number.ilike(search_term)
+        )
+        .order_by(User.full_name)
+        .limit(20)
+    ).unique().all()
+    return {"students": [{
+        "student_profile_id": row.id,
+        "student_number": row.student_number,
+        "full_name": row.user.full_name,
+        "email": row.user.email,
+        "program": row.program.name if row.program else None,
+        "academic_year": row.academic_year,
+        "enrollment_status": row.enrollment_status,
+    } for row in rows]}
+
+
+def tool_get_student_schedule(db: Session, user: User, args: dict) -> dict:
+    denied = _staff_record_access(user)
+    if denied:
+        return denied
+    student = _staff_student(db, args)
+    if not student:
+        return {"found": False, "message": "Student profile not found. Search for the student first."}
+    today = date.today()
+    rows = db.scalars(
+        select(ClassSchedule)
+        .where(
+            ClassSchedule.program_id == student.program_id,
+            ClassSchedule.academic_year == student.academic_year,
+            ClassSchedule.is_active.is_(True),
+            ClassSchedule.effective_from <= today,
+            (ClassSchedule.effective_until.is_(None) | (ClassSchedule.effective_until >= today)),
+        )
+        .order_by(ClassSchedule.day_of_week, ClassSchedule.start_time)
+    ).all()
+    return {"found": True, "student": student.user.full_name, "classes": [{
+        "course": row.course_name,
+        "day": row.day_of_week,
+        "start_time": row.start_time.isoformat(),
+        "end_time": row.end_time.isoformat(),
+        "instructor": row.instructor,
+        "room": row.room,
+    } for row in rows]}
+
+
+def _payment_summary(invoice: StudentInvoice) -> dict:
+    paid = Decimal("0.00")
+    for payment in invoice.payments:
+        paid += Decimal(str(payment.amount or 0))
+    balance = invoice.total_amount - paid
+    return {
+        "description": invoice.description,
+        "academic_year": invoice.academic_year,
+        "total_amount": _money(invoice.total_amount),
+        "paid_amount": _money(paid),
+        "balance": _money(balance),
+        "currency": invoice.currency,
+        "status": invoice.status,
+    }
+
+
+def _student_invoices(db: Session, profile_id: int) -> list[StudentInvoice]:
+    invoices = db.scalars(
+        select(StudentInvoice)
+        .options(joinedload(StudentInvoice.payments))
+        .where(StudentInvoice.student_profile_id == profile_id)
+        .order_by(StudentInvoice.created_at.desc())
+    ).unique().all()
+    return list(invoices)
+
+
+def tool_get_student_payments(db: Session, user: User, args: dict) -> dict:
+    denied = _staff_record_access(user)
+    if denied:
+        return denied
+    student = _staff_student(db, args)
+    if not student:
+        return {"found": False, "message": "Student profile not found. Search for the student first."}
+    invoices = _student_invoices(db, student.id)
+    items = [_payment_summary(invoice) for invoice in invoices]
+    return {"found": True, "student": student.user.full_name, "student_email": student.user.email,
+            "invoices": items, "has_paid": any(item["paid_amount"] > 0 for item in items)}
+
+
+def tool_list_student_payment_status(db: Session, user: User, args: dict) -> dict:
+    denied = _staff_record_access(user)
+    if denied:
+        return denied
+    status_filter = str(args.get("status", "all")).strip().lower()
+    if status_filter not in {"all", "paid", "unpaid", "partially_paid"}:
+        return {"students": [], "message": "Status must be all, paid, unpaid, or partially_paid."}
+    profiles = db.scalars(
+        select(StudentProfile)
+        .options(joinedload(StudentProfile.user))
+        .order_by(StudentProfile.id)
+    ).all()
+    students = []
+    for profile in profiles:
+        items = [_payment_summary(invoice) for invoice in _student_invoices(db, profile.id)]
+        paid_total = sum((float(item["paid_amount"]) for item in items), 0.0)
+        balance_total = sum((float(item["balance"]) for item in items), 0.0)
+        if not items or paid_total == 0:
+            payment_status = "unpaid"
+        elif balance_total <= 0:
+            payment_status = "paid"
+        else:
+            payment_status = "partially_paid"
+        if status_filter != "all" and payment_status != status_filter:
+            continue
+        students.append({"student_profile_id": profile.id, "student_number": profile.student_number,
+                         "full_name": profile.user.full_name, "email": profile.user.email,
+                         "payment_status": payment_status, "paid_total": paid_total,
+                         "balance_total": balance_total})
+    return {"students": students}
+
+
+def tool_get_student_grades(db: Session, user: User, args: dict) -> dict:
+    denied = _staff_record_access(user)
+    if denied:
+        return denied
+    student = _staff_student(db, args)
+    if not student:
+        return {"found": False, "message": "Student profile not found. Search for the student first."}
+    grades = db.scalars(
+        select(StudentGrade)
+        .options(joinedload(StudentGrade.schedule))
+        .where(StudentGrade.student_profile_id == student.id)
+        .order_by(StudentGrade.graded_at.desc(), StudentGrade.id.desc())
+    ).all()
+    return {"found": True, "student": student.user.full_name, "grades": [{
+        "course": grade.schedule.course_name,
+        "assessment": grade.assessment_name,
+        "score": _money(grade.score),
+        "max_score": _money(grade.max_score),
+        "percentage": round(float(grade.score / grade.max_score * 100), 2) if grade.max_score else None,
+        "letter_grade": grade.letter_grade,
+        "academic_year": grade.academic_year,
+        "graded_at": grade.graded_at.isoformat(),
+        "feedback": grade.feedback,
+    } for grade in grades]}
 
 
 def tool_get_my_payments(db: Session, user: User, args: dict) -> dict:
@@ -198,8 +377,9 @@ def tool_list_appointment_slots(db: Session, user: User, args: dict) -> dict:
 
 def tool_book_appointment(db: Session, user: User, args: dict) -> dict:
     student = _student_profile(db, user)
-    if not student:
-        return {"booked": False, "message": "No student profile is linked to this account."}
+    lead = db.scalar(select(ApplicantLead).where(ApplicantLead.user_id == user.id))
+    if not student and not lead:
+        return {"booked": False, "message": "No applicant record or student profile is linked to this account."}
     if args.get("confirmed") is not True:
         return {"booked": False, "message": "Booking requires explicit confirmation from the student."}
     slot_id = int(args.get("slot_id", 0))
@@ -212,7 +392,8 @@ def tool_book_appointment(db: Session, user: User, args: dict) -> dict:
         return {"booked": False, "message": "That appointment slot is no longer available. Please check available slots again."}
     appointment = Appointment(
         slot_id=slot.id,
-        student_profile_id=student.id,
+        student_profile_id=student.id if student else None,
+        applicant_lead_id=lead.id if lead else None,
         status="booked",
         reason=str(args.get("reason", "Student appointment"))[:1000],
         created_by=user.id,
@@ -228,13 +409,20 @@ def tool_book_appointment(db: Session, user: User, args: dict) -> dict:
 
 def tool_cancel_appointment(db: Session, user: User, args: dict) -> dict:
     student = _student_profile(db, user)
-    if not student:
-        return {"cancelled": False, "message": "No student profile is linked to this account."}
+    lead = db.scalar(select(ApplicantLead).where(ApplicantLead.user_id == user.id))
+    if not student and not lead:
+        return {"cancelled": False, "message": "No applicant record or student profile is linked to this account."}
     appointment_id = int(args.get("appointment_id", 0))
+    if student:
+        ownership = Appointment.student_profile_id == student.id
+    elif lead:
+        ownership = Appointment.applicant_lead_id == lead.id
+    else:
+        return {"cancelled": False, "message": "No applicant record or student profile is linked to this account."}
     appointment = db.scalar(
         select(Appointment)
         .options(joinedload(Appointment.slot))
-        .where(Appointment.id == appointment_id, Appointment.student_profile_id == student.id)
+        .where(Appointment.id == appointment_id, ownership)
         .with_for_update()
     )
     if not appointment:
@@ -265,6 +453,59 @@ def tool_create_student_request(db: Session, user: User, args: dict) -> dict:
             "message": "Your request has been submitted."}
 
 
+def tool_capture_applicant_interest(db: Session, user: User, args: dict) -> dict:
+    """Enrich the authenticated user's single applicant lead after consent."""
+    program_interest = str(args.get("program_interest", "")).strip()[:500]
+    phone = str(args.get("phone", "")).strip()[:40]
+    contact_consent = args.get("contact_consent") is True
+    program_id = args.get("program_id")
+
+    if not program_interest and program_id is None:
+        return {"updated": False, "message": "A program or study interest is required."}
+
+    program = None
+    if program_id is not None:
+        try:
+            program = db.scalar(select(Program).where(
+                Program.id == int(str(program_id)), Program.is_active.is_(True)
+            ))
+        except (TypeError, ValueError):
+            program = None
+        if not program:
+            return {"updated": False, "message": "The selected program could not be found."}
+
+    lead = db.scalar(select(ApplicantLead).where(ApplicantLead.user_id == user.id))
+    if not lead:
+        lead = ApplicantLead(
+            user_id=user.id, full_name=user.full_name, email=user.email,
+            phone="", source="ai_chat", status="new", contact_consent=False,
+        )
+        db.add(lead)
+        db.flush()
+
+    lead.source = "ai_chat"
+    if program is not None:
+        lead.interested_program_id = program.id
+    if program_interest:
+        lead.qualification_notes = program_interest
+
+    if not contact_consent and not lead.contact_consent:
+        db.flush()
+        return {"updated": True, "qualified": False,
+                "message": "Interest saved. Explicit contact consent and a phone number are still required."}
+
+    if phone:
+        lead.phone = phone
+    if contact_consent:
+        lead.contact_consent = True
+    if lead.contact_consent and lead.phone and (lead.interested_program_id is not None or lead.qualification_notes):
+        lead.status = "qualified"
+
+    db.flush()
+    return {"updated": True, "qualified": lead.status == "qualified", "lead_id": lead.id,
+            "message": "Your interest has been shared with the Academy admissions team."}
+
+
 def tool_request_human(db: Session, user: User, conversation: Any, args: dict) -> dict:
     reason = str(args.get("reason", "Student requested Academy staff assistance"))[:255]
     handoff = create_handoff(conversation, db, user.id, reason)
@@ -276,6 +517,11 @@ def tool_request_human(db: Session, user: User, conversation: Any, args: dict) -
 TOOL_DECLARATIONS = [
     {"name": "get_my_profile", "description": "Retrieve the authenticated student's own profile, program, academic year, and enrollment status. Never use for another person.", "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "get_my_schedule", "description": "Retrieve the authenticated student's current class schedule.", "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "search_students", "description": "Staff/admin only. Search students by name, email, or student number before retrieving another student's private records.", "parameters": {"type": "OBJECT", "properties": {"query": {"type": "STRING"}}, "required": ["query"]}},
+    {"name": "get_student_schedule", "description": "Staff/admin only. Retrieve a selected student's current class schedule using student_profile_id.", "parameters": {"type": "OBJECT", "properties": {"student_profile_id": {"type": "INTEGER"}}, "required": ["student_profile_id"]}},
+    {"name": "get_student_payments", "description": "Staff/admin only. Retrieve a selected student's invoices, paid amounts, balances, and payment status using student_profile_id.", "parameters": {"type": "OBJECT", "properties": {"student_profile_id": {"type": "INTEGER"}}, "required": ["student_profile_id"]}},
+    {"name": "list_student_payment_status", "description": "Staff/admin only. List students and whether their invoices are paid, unpaid, or partially paid.", "parameters": {"type": "OBJECT", "properties": {"status": {"type": "STRING", "enum": ["all", "paid", "unpaid", "partially_paid"]}}, "required": []}},
+    {"name": "get_student_grades", "description": "Staff/admin only. Retrieve grades and feedback for a selected student using student_profile_id.", "parameters": {"type": "OBJECT", "properties": {"student_profile_id": {"type": "INTEGER"}}, "required": ["student_profile_id"]}},
     {"name": "get_my_payments", "description": "Retrieve the authenticated student's own invoices, payments, and balances.", "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "get_my_attendance", "description": "Retrieve the authenticated student's own attendance summary.", "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "get_my_requests", "description": "Retrieve the authenticated student's own administrative requests.", "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
@@ -284,6 +530,7 @@ TOOL_DECLARATIONS = [
     {"name": "book_appointment", "description": "Book an available appointment slot ONLY after the student has explicitly asked to book and confirmed the specific slot. Set confirmed=true only when the student's message clearly confirms the booking.", "parameters": {"type": "OBJECT", "properties": {"slot_id": {"type": "INTEGER"}, "reason": {"type": "STRING"}, "confirmed": {"type": "BOOLEAN"}}, "required": ["slot_id", "confirmed"]}},
     {"name": "cancel_appointment", "description": "Cancel an appointment belonging to the authenticated student. Only call when the student explicitly asks to cancel.", "parameters": {"type": "OBJECT", "properties": {"appointment_id": {"type": "INTEGER"}}, "required": ["appointment_id"]}},
     {"name": "create_student_request", "description": "Submit an administrative request for the authenticated student, such as an enrollment certificate. Only call when the student clearly asks to submit/create a request.", "parameters": {"type": "OBJECT", "properties": {"category": {"type": "STRING"}, "subject": {"type": "STRING"}, "description": {"type": "STRING"}}, "required": ["category", "subject", "description"]}},
+    {"name": "capture_applicant_interest", "description": "Update the authenticated user's existing applicant lead after the user provides program interest, a phone number, and explicit permission for Academy admissions to contact them. Never create a duplicate lead and never persist a phone number without consent.", "parameters": {"type": "OBJECT", "properties": {"program_interest": {"type": "STRING"}, "program_id": {"type": "INTEGER"}, "phone": {"type": "STRING"}, "contact_consent": {"type": "BOOLEAN"}}, "required": ["program_interest", "phone", "contact_consent"]}},
     {"name": "request_human_assistance", "description": "Create a staff handoff when the student explicitly asks for a human or when the issue requires staff intervention. Do not claim handoff succeeded unless this tool returns created=true.", "parameters": {"type": "OBJECT", "properties": {"reason": {"type": "STRING"}}, "required": ["reason"]}},
 ]
 
@@ -291,6 +538,11 @@ TOOL_DECLARATIONS = [
 TOOL_HANDLERS = {
     "get_my_profile": tool_get_my_profile,
     "get_my_schedule": tool_get_my_schedule,
+    "search_students": tool_search_students,
+    "get_student_schedule": tool_get_student_schedule,
+    "get_student_payments": tool_get_student_payments,
+    "list_student_payment_status": tool_list_student_payment_status,
+    "get_student_grades": tool_get_student_grades,
     "get_my_payments": tool_get_my_payments,
     "get_my_attendance": tool_get_my_attendance,
     "get_my_requests": tool_get_my_requests,
@@ -299,4 +551,5 @@ TOOL_HANDLERS = {
     "book_appointment": tool_book_appointment,
     "cancel_appointment": tool_cancel_appointment,
     "create_student_request": tool_create_student_request,
+    "capture_applicant_interest": tool_capture_applicant_interest,
 }

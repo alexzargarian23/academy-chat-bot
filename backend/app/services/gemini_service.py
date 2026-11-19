@@ -7,6 +7,7 @@ from typing import cast
 
 from dotenv import load_dotenv
 from google import genai
+
 from google.genai import errors, types
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -25,7 +26,7 @@ if not MODEL_NAME:
     raise ValueError("GEMINI_MODEL is not configured")
 
 PRIMARY_MODEL_NAME: str = MODEL_NAME
-
+FALLBACK_MODEL_NAME = os.getenv("GEMINI_FALLBACK_MODEL") or PRIMARY_MODEL_NAME
 client = genai.Client(
     api_key=API_KEY,
     http_options=types.HttpOptions(timeout=30_000),

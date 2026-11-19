@@ -30,7 +30,8 @@ class Appointment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     slot_id: Mapped[int] = mapped_column(ForeignKey("appointment_slots.id"), nullable=False, index=True)
-    student_profile_id: Mapped[int] = mapped_column(ForeignKey("student_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_profile_id: Mapped[int | None] = mapped_column(ForeignKey("student_profiles.id", ondelete="CASCADE"), nullable=True, index=True)
+    applicant_lead_id: Mapped[int | None] = mapped_column(ForeignKey("applicant_leads.id", ondelete="SET NULL"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="booked", index=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     staff_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -40,4 +41,5 @@ class Appointment(Base):
 
     slot = relationship("AppointmentSlot", back_populates="appointments")
     student_profile = relationship("StudentProfile")
+    applicant_lead = relationship("ApplicantLead")
     creator = relationship("User", foreign_keys=[created_by])
