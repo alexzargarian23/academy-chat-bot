@@ -3,7 +3,6 @@ from functools import lru_cache
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sentence_transformers import SentenceTransformer
 
 from app.models import Document, DocumentChunk
 from app.services.assistant_service import generate_text_response
@@ -15,7 +14,10 @@ TOP_K = 5
 
 @lru_cache(maxsize=1)
 def get_embedding_model():
-    return SentenceTransformer(MODEL_NAME)
+    """Load the embedding model only when retrieval is first used."""
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(MODEL_NAME, device="cpu")
 
 
 def get_allowed_visibility(user_role: str) -> list[str]:
@@ -40,10 +42,13 @@ def retrieve_relevant_chunks(
     top_k: int = TOP_K,
 ) -> list:
 
+    if not question or len(question.strip()) < 2:
+        return []
+
     model = get_embedding_model()
 
     query_embedding = model.encode(
-        f"query: {question}",
+        f"query: {question.strip()}",
         normalize_embeddings=True,
     ).tolist()
 

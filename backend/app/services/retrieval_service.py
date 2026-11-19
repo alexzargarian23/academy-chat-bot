@@ -1,7 +1,6 @@
 
 from functools import lru_cache
 
-from sentence_transformers import SentenceTransformer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,7 +13,12 @@ MODEL_NAME = "intfloat/multilingual-e5-small"
 @lru_cache(maxsize=1)
 def get_embedding_model():
     """Load the embedding model only when knowledge search is first used."""
-    return SentenceTransformer(MODEL_NAME)
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(
+        MODEL_NAME,
+        device="cpu",
+    )
 
 
 def get_allowed_visibility(user_role: str) -> list[str]:
@@ -55,7 +59,11 @@ def search_knowledge(
     )
 
     statement = (
-        select(DocumentChunk, Document)
+        select(
+            DocumentChunk,
+            Document,
+            distance.label("distance"),
+        )
         .join(
             Document,
             Document.id == DocumentChunk.document_id,
@@ -73,29 +81,8 @@ def search_knowledge(
 
     results = []
 
-    for chunk, document in rows:
-        similarity = 1 - float(
-            distance_value
-        ) if False else None
-
-        # Cosine similarity = 1 - cosine distance.
-        chunk_distance = float(
-            model.similarity(
-                query_embedding,
-                chunk.embedding,
-            )[0][0]
-        ) if False else None
-
-        # The database distance is calculated below using the
-        # same vector operator used for ordering.
-        actual_distance = float(
-            db.scalar(
-                select(DocumentChunk.embedding.cosine_distance(query_embedding))
-                .where(DocumentChunk.id == chunk.id)
-            )
-        )
-
-        similarity = 1 - actual_distance
+    for chunk, document, chunk_distance in rows:
+        similarity = 1 - float(chunk_distance)
 
         if similarity < min_similarity:
             continue
