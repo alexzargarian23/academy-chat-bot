@@ -1,6 +1,6 @@
 """Groq orchestration for the Academy chatbot (token-optimized)."""
 from __future__ import annotations
-from app.services.retrieval_service import search_knowledge
+
 import json
 import logging
 import os
@@ -18,6 +18,7 @@ from app.services.assistant_tools import (
     TOOL_HANDLERS,
     tool_request_human,
 )
+from app.services.retrieval_service import search_knowledge
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_FILE)
@@ -49,6 +50,12 @@ MAX_HISTORY_CHARS = 500
 MAX_QUESTION_CHARS = 1500
 MAX_TOOL_RESULT_CHARS = 3000
 
+# --- Retrieval settings ---
+# Lower this if retrieval returns nothing for questions your documents cover.
+# Check the "Retrieval returned" log line to see how many chunks come back.
+RETRIEVAL_LIMIT = 5
+RETRIEVAL_MIN_SIMILARITY = 0.40
+
 NO_GROUNDED_ANSWER = (
     "I can only help with verified Academy information and your "
     "authorized Academy records. I can't answer that question from "
@@ -65,7 +72,7 @@ SYSTEM_INSTRUCTION = """You are the Academy concierge. Reply in the user's langu
 
 SCOPE: Help only with the Academy, the user's own Academy records, appointments, and actions done by tools. For unrelated questions (coding, medical, legal, general knowledge), call no tool and give no answer; say you can only help with Academy information. Brief replies to greetings, thanks, and "what can you do" are fine.
 
-FACTS: For programs, admission, fees, policies, or procedures, call search_academy_knowledge and answer only from the excerpts, citing [Source N, page X]. If nothing useful is found, say you can't verify it and offer staff help. Never invent.
+FACTS: For programs, admission, fees, policies, or procedures, the backend may already supply RETRIEVED ACADEMY DOCUMENTS in a system message. If they are present and relevant, answer from them directly, citing [Source N, page X], and do not call search_academy_knowledge. Call search_academy_knowledge only when no documents were supplied or they do not cover the question. If nothing useful is found, say you can't verify it and offer staff help. Never invent.
 
 RECORDS: Tools use the logged-in account. Students: use get_my_* for their own profile, schedule, payments, attendance, and requests; give amounts with currency and separate total, paid, and balance. Never access anyone else's records. Staff/admin: search_students first if needed, then use the staff-only tools. Never reveal private records to students or guests.
 
@@ -376,22 +383,53 @@ def generate_text_response(prompt: str) -> str:
     return answer
 
 
-def _tool_message_content(result: dict) -> str:
-    """Serialize a tool result, capping its size to protect the token budget."""
+def _shrink_strings(value: Any, limit: int) -> Any:
+    """Recursively cut every long string to `limit` chars, keeping valid JSON."""
 
-    payload = json.dumps(
-        {"result": result},
-        ensure_ascii=False,
-        default=str,
-    )
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + "..."
+
+    if isinstance(value, list):
+        return [_shrink_strings(item, limit) for item in value]
+
+    if isinstance(value, dict):
+        return {key: _shrink_strings(item, limit) for key, item in value.items()}
+
+    return value
+
+
+def _tool_message_content(result: dict) -> str:
+    """Serialize a tool result, capping its size to protect the token budget.
+
+    Instead of slicing the serialized JSON (which produces broken JSON),
+    shrink the individual strings until the payload fits.
+    """
+
+    def dump(data: Any) -> str:
+        return json.dumps(
+            {"result": data},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    payload = dump(result)
 
     if len(payload) <= MAX_TOOL_RESULT_CHARS:
         return payload
 
+    for limit in (1200, 800, 500, 300, 150):
+        shrunk = dump(_shrink_strings(result, limit))
+
+        if len(shrunk) <= MAX_TOOL_RESULT_CHARS:
+            return shrunk
+
+    # Last resort: still valid JSON, but flagged as truncated.
     return json.dumps(
         {"result": payload[:MAX_TOOL_RESULT_CHARS], "truncated": True},
         ensure_ascii=False,
     )
+
+
 def retrieve_sources(question: str, db: Session, user: User) -> tuple[list[dict], str]:
     """
     Retrieve relevant Academy documents before calling Groq.
@@ -402,12 +440,19 @@ def retrieve_sources(question: str, db: Session, user: User) -> tuple[list[dict]
             question=question,
             db=db,
             user_role=user.role,
-            limit=5,
-            min_similarity=0.55,
+            limit=RETRIEVAL_LIMIT,
+            min_similarity=RETRIEVAL_MIN_SIMILARITY,
         )
     except Exception:
         logger.exception("Knowledge retrieval failed")
         return [], ""
+
+    logger.info(
+        "Retrieval returned %d chunk(s) for role=%s (min_similarity=%s)",
+        len(results),
+        getattr(user, "role", None),
+        RETRIEVAL_MIN_SIMILARITY,
+    )
 
     sources = []
     context_parts = []
@@ -438,6 +483,7 @@ def retrieve_sources(question: str, db: Session, user: User) -> tuple[list[dict]
 
     return sources, context
 
+
 def run_assistant(
     question: str,
     db: Session,
@@ -450,6 +496,7 @@ def run_assistant(
         history,
         question,
     )
+
     sources, retrieved_context = retrieve_sources(
         question,
         db,
@@ -463,29 +510,39 @@ def run_assistant(
     )
 
     if retrieved_context:
-        messages.append({
+        retrieved_message = {
             "role": "system",
             "content": (
-                    "RETRIEVED ACADEMY DOCUMENTS:\n"
-                    "The following passages were retrieved by the backend. "
-                    "Use them as evidence for relevant Academy questions. "
-                    "Cite sources using exactly the supplied [Source N] labels. "
-                    "Do not invent source numbers or page numbers. "
-                    "If the passages do not support an answer, say that "
-                    "the information cannot be verified. "
-                    "Do not use these documents to answer personal student "
-                    "record questions.\n\n"
-                    + retrieved_context
+                "RETRIEVED ACADEMY DOCUMENTS:\n"
+                "The backend already searched the Academy knowledge base. "
+                "Answer relevant Academy questions directly from these "
+                "passages and do not call search_academy_knowledge unless "
+                "they are clearly insufficient. "
+                "Cite sources using exactly the supplied [Source N] labels. "
+                "Do not invent source numbers or page numbers. "
+                "If the passages do not support an answer, say that "
+                "the information cannot be verified. "
+                "Do not use these documents to answer personal student "
+                "record questions.\n\n"
+                + retrieved_context
             ),
-        })
+        }
+
+        # Insert BEFORE the final user message so the model sees the
+        # evidence first and the question last.
+        messages.insert(len(messages) - 1, retrieved_message)
+
     action_results: list[dict] = []
 
     handoff_required = False
     handoff_reason = None
-    grounded = False
+
+    # Pre-retrieved documents count as grounding. Previously this was
+    # always False until a tool ran, which discarded good answers.
+    grounded = bool(sources)
     knowledge_search_attempted = False
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for round_number in range(MAX_TOOL_ROUNDS):
         response = _generate_response(messages, user.role)
 
         if not response.choices:
@@ -495,6 +552,15 @@ def run_assistant(
 
         assistant_message = response.choices[0].message
         tool_calls = assistant_message.tool_calls or []
+
+        logger.info(
+            "round=%d grounded=%s sources=%d ctx_len=%d tool_calls=%d",
+            round_number,
+            grounded,
+            len(sources),
+            len(retrieved_context),
+            len(tool_calls),
+        )
 
         if not tool_calls:
             answer = (assistant_message.content or "").strip()
