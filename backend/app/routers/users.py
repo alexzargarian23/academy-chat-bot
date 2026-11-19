@@ -28,7 +28,7 @@ def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
         full_name=user_data.full_name.strip(),
         email=email,
         password_hash=hash_password(user_data.password),
-        role="student",
+        role="guest",
     )
     db.add(new_user)
     db.flush()

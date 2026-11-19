@@ -184,6 +184,7 @@ def _slack_user_email(user_id: str) -> str | None:
     return str(email).strip().lower() if email else None
 
 
+
 def _telegram_auth_response(
     db: Session,
     identity: ChannelIdentity,
@@ -195,59 +196,103 @@ def _telegram_auth_response(
 ) -> str | None:
     if provider != "telegram":
         return None
+
     command = question.strip().lower()
+
+    # Logout: return the Telegram user to guest access.
     if command == "/logout":
         guest = _guest_user(db, provider, external_id, display_name)
-        _bind_identity(db, identity, guest, provider, language, authenticated=False)
+        _bind_identity(
+            db, identity, guest, provider, language,
+            authenticated=False
+        )
         db.commit()
         return "You have been logged out. You can still ask about public Academy information."
+
+    # Login: explicitly start authentication.
     if command == "/login":
         identity.auth_stage = "email"
         identity.pending_email = None
         identity.failed_auth_attempts = 0
         db.commit()
         return "Please enter your Academy email address."
+
+    # Already authenticated: continue normally.
     if identity.authenticated:
         return None
-    if identity.auth_stage == "guest":
+
+    # No login requested: continue as a guest.
+    if identity.auth_stage is None or identity.auth_stage == "guest":
         return None
-    if identity.auth_stage is None:
-        identity.auth_stage = "email"
-        db.commit()
-        return "To access registered account data, please enter your Academy email address."
+
+    # Check the Academy email.
     if identity.auth_stage == "email":
         email = question.strip().lower()
-        user = db.scalar(select(User).where(func.lower(User.email) == email))
+
+        user = db.scalar(
+            select(User).where(func.lower(User.email) == email)
+        )
+
         if not user or user.role == "guest":
             identity.pending_email = None
             identity.auth_stage = "guest"
             db.commit()
-            return "That email is not registered. You may continue with public Academy information, but private data is unavailable. Send /login if you want to try another account."
+
+            return (
+                "This email is not registered as an Academy account. "
+                "You can continue using public Academy information. "
+                "Send /login if you want to try again."
+            )
+
         identity.pending_email = email
         identity.auth_stage = "password"
         identity.failed_auth_attempts = 0
         db.commit()
+
         return "Email found. Please enter your Academy password."
+
+    # Verify the password.
     if identity.auth_stage == "password":
-        user = db.scalar(select(User).where(func.lower(User.email) == identity.pending_email)) if identity.pending_email else None
-        if not user or not verify_password(question, user.password_hash):
+        user = db.scalar(
+            select(User).where(
+                func.lower(User.email) == identity.pending_email
+            )
+        ) if identity.pending_email else None
+
+        if not user or not verify_password(
+            question, user.password_hash
+        ):
             identity.failed_auth_attempts += 1
+
             if identity.failed_auth_attempts >= 5:
-                identity.auth_stage = "email"
+                identity.auth_stage = "guest"
                 identity.pending_email = None
                 identity.failed_auth_attempts = 0
-                response = "Too many failed attempts. Please start again with your Academy email."
-            else:
-                response = "Incorrect password. Please try again."
+
+                db.commit()
+
+                return (
+                    "Too many failed attempts. "
+                    "You are still able to use public Academy information. "
+                    "Send /login to try again."
+                )
+
             db.commit()
-            return response
-        _bind_identity(db, identity, user, provider, language, authenticated=True)
+            return "Incorrect password. Please try again."
+
+        _bind_identity(
+            db, identity, user, provider, language,
+            authenticated=True
+        )
         db.commit()
-        return "You are authenticated. You can now access the data permitted for your Academy role."
-    identity.auth_stage = None
-    identity.pending_email = None
-    db.commit()
-    return "Please enter your Academy email address to authenticate."
+
+        return (
+            "You are authenticated. "
+            "You can now access the data permitted for your Academy role."
+        )
+
+    return None
+
 
 
 def _process_inbound(db: Session, provider: str, external_id: str, display_name: str, language: str, event_id: str, question: str, account_email: str | None = None) -> str | None:

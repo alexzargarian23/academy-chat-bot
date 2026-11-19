@@ -1,6 +1,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -54,7 +55,9 @@ def create_student(
 ):
     require_staff_or_admin(current_user)
 
-    user = db.query(User).filter(User.id == data.user_id).first()
+    user = db.query(User).filter(
+        User.id == data.user_id
+    ).first()
 
     if not user:
         raise HTTPException(
@@ -62,10 +65,11 @@ def create_student(
             detail="User not found"
         )
 
-    if user.role != "student":
+    # Only guests or existing students can receive student profiles.
+    if user.role not in ["guest", "student"]:
         raise HTTPException(
             status_code=400,
-            detail="Only users with the student role can have student profiles"
+            detail="This user cannot be registered as a student"
         )
 
     existing_profile = db.query(StudentProfile).filter(
@@ -99,11 +103,22 @@ def create_student(
                 detail="Program not found"
             )
 
+    # Create the profile and promote the user together.
     student = StudentProfile(**data.model_dump())
+    user.role = "student"
 
     db.add(student)
-    db.commit()
-    db.refresh(student)
+
+    try:
+        db.commit()
+        db.refresh(student)
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Could not create student profile. Check the student number and user profile."
+        )
 
     return build_student_response(student)
 
@@ -256,7 +271,15 @@ def update_student(
     for field, value in updates.items():
         setattr(student, field, value)
 
-    db.commit()
-    db.refresh(student)
+    try:
+        db.commit()
+        db.refresh(student)
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Could not update student profile. Check for duplicate values."
+        )
 
     return build_student_response(student)
