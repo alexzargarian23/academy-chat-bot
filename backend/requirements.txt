@@ -21,7 +21,7 @@ pycparser==3.12
 pydantic==2.14.3
 pydantic-settings==2.16.3
 pydantic_core==2.50.4
-pwdlib==0.4.2
+pwdlib[argon2]==0.4.2
 python-docx==1.2.0
 python-dotenv==1.2.4
 python-jose==3.5.0
