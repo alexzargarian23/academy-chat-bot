@@ -1,24 +1,9 @@
 
-from functools import lru_cache
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Document, DocumentChunk
-
-
-MODEL_NAME = "intfloat/multilingual-e5-small"
-
-
-@lru_cache(maxsize=1)
-def get_embedding_model():
-    """Load the embedding model only when knowledge search is first used."""
-    from sentence_transformers import SentenceTransformer
-
-    return SentenceTransformer(
-        MODEL_NAME,
-        device="cpu",
-    )
+from app.services.embedding_service import get_query_embedding
 
 
 def get_allowed_visibility(user_role: str) -> list[str]:
@@ -45,18 +30,10 @@ def search_knowledge(
     if not question or len(question.strip()) < 2:
         return []
 
-    model = get_embedding_model()
-
-    query_embedding = model.encode(
-        f"query: {question.strip()}",
-        normalize_embeddings=True,
-    ).tolist()
-
+    query_embedding = get_query_embedding(question.strip())
     allowed_visibility = get_allowed_visibility(user_role)
 
-    distance = DocumentChunk.embedding.cosine_distance(
-        query_embedding
-    )
+    distance = DocumentChunk.embedding.cosine_distance(query_embedding)
 
     statement = (
         select(
@@ -64,10 +41,7 @@ def search_knowledge(
             Document,
             distance.label("distance"),
         )
-        .join(
-            Document,
-            Document.id == DocumentChunk.document_id,
-        )
+        .join(Document, Document.id == DocumentChunk.document_id)
         .where(
             Document.visibility.in_(allowed_visibility),
             Document.status == "completed",
@@ -78,7 +52,6 @@ def search_knowledge(
     )
 
     rows = db.execute(statement).all()
-
     results = []
 
     for chunk, document, chunk_distance in rows:

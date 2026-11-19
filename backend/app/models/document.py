@@ -74,9 +74,9 @@ class DocumentChunk(Base):
         nullable=True
     )
 
-    # 384 dimensions for multilingual-e5-small
-    embedding = mapped_column(Vector(384), nullable=True)
 
+    # 768 dimensions for Gemini gemini-embedding-001
+    embedding = mapped_column(Vector(768), nullable=True)
     document: Mapped["Document"] = relationship(
         back_populates="chunks"
     )
