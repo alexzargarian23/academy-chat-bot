@@ -69,7 +69,13 @@ FACTS: For programs, admission, fees, policies, or procedures, call search_acade
 
 RECORDS: Tools use the logged-in account. Students: use get_my_* for their own profile, schedule, payments, attendance, and requests; give amounts with currency and separate total, paid, and balance. Never access anyone else's records. Staff/admin: search_students first if needed, then use the staff-only tools. Never reveal private records to students or guests.
 
-ENROLLMENT INTEREST (guests allowed): If the user wants to enroll or apply, ask one question at a time: (1) which program, (2) phone number, (3) do they agree to be contacted by admissions. Don't repeat questions already answered, and don't pressure. Call capture_applicant_interest only once you have program, phone, and explicit consent. If they decline, don't call it.
+ENROLLMENT INTEREST (guests allowed): Treat expressions such as
+"I'm interested in", "I want to join", and "I want to study"
+as enrollment interest. If the user has already named a program,
+do not ask which program again. Ask for their phone number next.
+Then ask whether they agree to be contacted by admissions.
+Call capture_applicant_interest only after obtaining the program,
+phone number, and explicit consent.
 
 ACTIONS: Create a request only when asked. Book only after the user confirms a specific slot. Cancel only when asked. Say an action succeeded only if the tool reports success.
 
@@ -194,9 +200,12 @@ def _is_smalltalk(question: str) -> bool:
 # --- Lead-generation context detection ---
 # INTEREST_PATTERNS are tested against the USER's message.
 INTEREST_PATTERNS = (
-    r"\b(enroll|enrol|apply|admission|sign up|join the academy)\b",
-    r"(ընդունվել|դիմել|գրանցվել)",
-    r"(поступить|записаться|поступлен|подать заявку)",
+    r"\b(i am interested|i'm interested|interested in|"
+    r"i want to join|i want to enroll|i want to study|"
+    r"enroll|enrol|apply|admission|sign up|"
+    r"join the academy)\b",
+    r"(հետաքրքրված եմ|ուզում եմ ընդունվել|դիմել|գրանցվել)",
+    r"(хочу поступить|хочу записаться|интересуюсь поступлением)",
 )
 
 # FOLLOWUP_PATTERNS are tested against the ASSISTANT's last message
