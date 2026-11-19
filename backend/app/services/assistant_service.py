@@ -47,11 +47,13 @@ MAX_OUTPUT_TOKENS = 800
 MAX_HISTORY_MESSAGES = 4
 MAX_HISTORY_CHARS = 1000
 MAX_QUESTION_CHARS = 1500
+
 NO_GROUNDED_ANSWER = (
     "I can only help with verified Academy information and your "
     "authorized Academy records. I can't answer that question from "
     "the information available to me."
 )
+
 SMALLTALK_RESPONSE = (
     "Hello! I can help with verified Academy information, your "
     "authorized student records, and appointments."
@@ -163,62 +165,116 @@ OPENAI_TOOLS = _build_openai_tools()
 
 
 def _is_smalltalk(question: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9' ]+", " ", question.lower()).strip()
+    normalized = re.sub(
+        r"[^a-z0-9' ]+",
+        " ",
+        question.lower(),
+    ).strip()
+
     return bool(re.fullmatch(
         r"hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you|help|what can you do|who are you",
         normalized,
     ))
 
+
 def _is_lead_generation_context(
     history: list[dict[str, str]],
     question: str,
 ) -> bool:
-    """Detect enrollment-interest messages and their follow-up replies."""
+    """Recognize enrollment-interest messages and their follow-up replies."""
 
-    text = " ".join(
-        [item.get("content", "") for item in history[-6:]]
-        + [question]
-    ).lower()
+    interest_patterns = (
+        r"\b(i am interested|i'm interested|interested in enrolling|"
+        r"want to enroll|want to join the academy|"
+        r"want to apply|admission information)\b",
+        r"(հետաքրքրված եմ|ուզում եմ ընդունվել)",
+        r"(хочу поступить|хочу записаться|интересуюсь поступлением)",
+    )
 
-    patterns = [
-        r"\b(interested|enroll|enrolling|admission|joining|"
-        r"join the academy|apply|application)\b",
+    followup_patterns = (
         r"\b(which program|what program|phone number|"
         r"contact you|admissions team|agree to be contacted)\b",
-        r"(հետաքրքրված եմ|ընդունվել|հեռախոսահամար)",
-        r"(хочу поступить|поступление|номер телефона|"
-        r"какую программу|связаться с вами)",
+        r"(ո՞ր ծրագր|հեռախոսահամար|կապ հաստատել)",
+        r"(какую программу|номер телефона|связаться с вами|"
+        r"согласны на связь)",
+    )
+
+    recent_user_messages = [
+        item.get("content", "").lower()
+        for item in history[-4:]
+        if item.get("sender") == "user"
     ]
 
-    return any(re.search(pattern, text, re.I) for pattern in patterns)
+    recent_user_messages.append(question.lower())
+    recent_text = " ".join(recent_user_messages)
+
+    # An explicit enrollment-interest statement starts the flow.
+    if any(
+        re.search(pattern, recent_text, re.I)
+        for pattern in interest_patterns
+    ):
+        return True
+
+    # Follow-up replies are allowed only if the recent conversation
+    # contains an actual enrollment-interest statement.
+    recent_context = " ".join(
+        item.get("content", "").lower()
+        for item in history[-4:]
+    )
+
+    has_recent_interest = any(
+        re.search(pattern, recent_context, re.I)
+        for pattern in interest_patterns
+    )
+
+    return has_recent_interest and any(
+        re.search(pattern, question.lower(), re.I)
+        for pattern in followup_patterns
+    )
+
+
 def _tool_result_is_grounded(name: str, result: dict) -> bool:
     if name == "search_academy_knowledge":
         return bool(result.get("results"))
+
     if name in {
-        "get_my_profile", "get_my_schedule", "get_my_payments",
-        "get_my_attendance", "get_my_requests",
+        "get_my_profile",
+        "get_my_schedule",
+        "get_my_payments",
+        "get_my_attendance",
+        "get_my_requests",
     }:
         return result.get("found") is True
+
     if name == "search_students":
         return "students" in result
+
     if name in {
-        "get_student_schedule", "get_student_payments", "get_student_grades",
+        "get_student_schedule",
+        "get_student_payments",
+        "get_student_grades",
     }:
         return result.get("found") is True
+
     if name == "list_student_payment_status":
         return "students" in result
+
     if name == "list_appointment_slots":
         return "available_slots" in result
+
     if name == "book_appointment":
         return result.get("booked") is True
+
     if name == "cancel_appointment":
         return result.get("cancelled") is True
+
     if name == "create_student_request":
         return result.get("created") is True
+
     if name == "capture_applicant_interest":
         return result.get("updated") is True
-    return False
 
+    return False
 
 
 def _history_to_messages(
@@ -231,7 +287,10 @@ def _history_to_messages(
         f"\n\nAUTHENTICATED USER ROLE: {user_role}\n"
         "Apply the role permissions above. If the role is staff or admin "
         "and the question names another student, search for that student "
-        "first, then use the matching staff-only record tool."
+        "first, then use the matching staff-only record tool.\n"
+        "GUEST ACCESS: A guest may ask Academy admissions questions and "
+        "start the lead-generation conversation. This does not grant "
+        "access to private student records."
     )
 
     messages = [
@@ -241,7 +300,6 @@ def _history_to_messages(
         }
     ]
 
-    # Keep only the most recent four messages.
     recent_history = history[-MAX_HISTORY_MESSAGES:]
 
     for item in recent_history:
@@ -250,7 +308,6 @@ def _history_to_messages(
         if not content:
             continue
 
-        # Prevent very long previous messages from consuming the token budget.
         content = content[:MAX_HISTORY_CHARS]
 
         role = (
@@ -281,8 +338,10 @@ def _generate_response(messages: list[dict]) -> Any:
         max_tokens=MAX_OUTPUT_TOKENS,
     )
 
+
 def generate_text_response(prompt: str) -> str:
     """Generate plain text for non-chat workflows such as email drafts."""
+
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=[
@@ -291,11 +350,15 @@ def generate_text_response(prompt: str) -> str:
         ],
         max_tokens=MAX_OUTPUT_TOKENS,
     )
+
     if not response.choices:
         raise RuntimeError("Groq returned no response choices")
+
     answer = (response.choices[0].message.content or "").strip()
+
     if not answer:
         raise RuntimeError("Groq returned an empty answer")
+
     return answer
 
 
@@ -306,14 +369,17 @@ def run_assistant(
     conversation: Conversation,
     history: list[dict[str, str]],
 ) -> dict:
+
     lead_generation_context = _is_lead_generation_context(
         history,
         question,
     )
 
     messages = _history_to_messages(history, question, user.role)
+
     sources: list[dict] = []
     action_results: list[dict] = []
+
     handoff_required = False
     handoff_reason = None
     grounded = False
@@ -339,12 +405,16 @@ def run_assistant(
                 )
 
             if (
-                    not grounded
-                    and not handoff_required
-                    and not lead_generation_context
+                not grounded
+                and not handoff_required
+                and not lead_generation_context
             ):
                 return {
-                    "answer": SMALLTALK_RESPONSE if _is_smalltalk(question) else NO_GROUNDED_ANSWER,
+                    "answer": (
+                        SMALLTALK_RESPONSE
+                        if _is_smalltalk(question)
+                        else NO_GROUNDED_ANSWER
+                    ),
                     "sources": [],
                     "handoff_required": False,
                     "handoff_reason": None,
@@ -405,10 +475,14 @@ def run_assistant(
                         args,
                     )
 
-                    grounded = grounded or _tool_result_is_grounded(name, result)
+                    grounded = (
+                        grounded
+                        or _tool_result_is_grounded(name, result)
+                    )
 
                     if name == "search_academy_knowledge":
                         knowledge_search_attempted = True
+
                         for item in result.get("results", []):
                             source_id = len(sources) + 1
 
@@ -461,11 +535,12 @@ def run_assistant(
             })
 
         if (
-                knowledge_search_attempted
-                and not grounded
-                and not handoff_required
-                and not lead_generation_context
-        ):            return {
+            knowledge_search_attempted
+            and not grounded
+            and not handoff_required
+            and not lead_generation_context
+        ):
+            return {
                 "answer": NO_GROUNDED_ANSWER,
                 "sources": [],
                 "handoff_required": False,
@@ -473,12 +548,26 @@ def run_assistant(
                 "actions": action_results,
             }
 
+    # Final fallback after all tool rounds have been used.
+    if lead_generation_context and not grounded and not handoff_required:
+        fallback_answer = (
+            "I can help you with your enrollment enquiry, "
+            "but I couldn't complete the next step. "
+            "Please try again or ask to speak with admissions staff."
+        )
+    else:
+        fallback_answer = (
+            NO_GROUNDED_ANSWER
+            if not grounded and not handoff_required
+            else (
+                "I couldn't complete that request reliably. "
+                "Please try rephrasing it or ask to speak "
+                "with Academy staff."
+            )
+        )
+
     return {
-        "answer": NO_GROUNDED_ANSWER if not grounded and not handoff_required else (
-            "I couldn't complete that request reliably. "
-            "Please try rephrasing it or ask to speak "
-            "with Academy staff."
-        ),
+        "answer": fallback_answer,
         "sources": sources,
         "handoff_required": handoff_required,
         "handoff_reason": handoff_reason,
