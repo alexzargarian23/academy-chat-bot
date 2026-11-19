@@ -41,8 +41,12 @@ client = OpenAI(
     max_retries=2,
 )
 
-MAX_TOOL_ROUNDS = 5
-MAX_OUTPUT_TOKENS = 1400
+MAX_TOOL_ROUNDS = 3
+MAX_OUTPUT_TOKENS = 800
+
+MAX_HISTORY_MESSAGES = 4
+MAX_HISTORY_CHARS = 1000
+MAX_QUESTION_CHARS = 1500
 NO_GROUNDED_ANSWER = (
     "I can only help with verified Academy information and your "
     "authorized Academy records. I can't answer that question from "
@@ -182,17 +186,20 @@ def _tool_result_is_grounded(name: str, result: dict) -> bool:
     return False
 
 
+
 def _history_to_messages(
     history: list[dict[str, str]],
     question: str,
     user_role: str,
 ) -> list[dict]:
+
     role_context = (
         f"\n\nAUTHENTICATED USER ROLE: {user_role}\n"
-        "Apply the role permissions above. If the role is staff or admin and "
-        "the question names another student, search for that student first, "
-        "then use the matching staff-only record tool."
+        "Apply the role permissions above. If the role is staff or admin "
+        "and the question names another student, search for that student "
+        "first, then use the matching staff-only record tool."
     )
+
     messages = [
         {
             "role": "system",
@@ -200,11 +207,17 @@ def _history_to_messages(
         }
     ]
 
-    for item in history[-10:]:
+    # Keep only the most recent four messages.
+    recent_history = history[-MAX_HISTORY_MESSAGES:]
+
+    for item in recent_history:
         content = item.get("content", "").strip()
 
         if not content:
             continue
+
+        # Prevent very long previous messages from consuming the token budget.
+        content = content[:MAX_HISTORY_CHARS]
 
         role = (
             "user"
@@ -219,7 +232,7 @@ def _history_to_messages(
 
     messages.append({
         "role": "user",
-        "content": question,
+        "content": question[:MAX_QUESTION_CHARS],
     })
 
     return messages
@@ -233,7 +246,6 @@ def _generate_response(messages: list[dict]) -> Any:
         tool_choice="auto",
         max_tokens=MAX_OUTPUT_TOKENS,
     )
-
 
 def generate_text_response(prompt: str) -> str:
     """Generate plain text for non-chat workflows such as email drafts."""

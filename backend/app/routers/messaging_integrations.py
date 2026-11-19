@@ -289,28 +289,71 @@ def _process_inbound(db: Session, provider: str, external_id: str, display_name:
     return answer
 
 
-def _process_slack_event_background(payload: dict[str, Any], event_id: str) -> None:
-    """Process Slack events outside the 3-second Events API acknowledgement window."""
+
+def _process_slack_event_background(
+    payload: dict[str, Any],
+    event_id: str,
+) -> None:
+
     db = SessionLocal()
+
+    event = payload.get("event") or {}
+    channel_id = str(event.get("channel") or "")
+    thread_ts = event.get("thread_ts") or event.get("ts")
+
     try:
-        event = payload.get("event") or {}
         sender_id = str(event.get("user") or "")
-        channel_id = str(event.get("channel") or "")
-        text = re.sub(r"<@[^>]+>", "", event.get("text", "")).strip()
-        if not sender_id or not channel_id or not text:
+
+        message_text = re.sub(
+            r"<@[^>]+>",
+            "",
+            event.get("text", ""),
+        ).strip()
+
+        if not sender_id or not channel_id or not message_text:
             return
+
         team_id = str(payload.get("team_id") or "workspace")
         external_id = f"{team_id}:{sender_id}"
+
         answer = _process_inbound(
-            db, "slack", external_id, f"Slack user {sender_id}", "en", event_id, text,
+            db,
+            "slack",
+            external_id,
+            f"Slack user {sender_id}",
+            "en",
+            event_id,
+            message_text,
             _slack_user_email(sender_id),
         )
+
         if answer:
-            thread_ts = event.get("thread_ts") or event.get("ts")
-            _slack_send(channel_id, answer, str(thread_ts) if thread_ts else None)
+            _slack_send(
+                channel_id,
+                answer,
+                str(thread_ts) if thread_ts else None,
+            )
+
     except Exception:
         db.rollback()
-        logger.exception("Background Slack event processing failed")
+
+        logger.exception(
+            "Background Slack event processing failed"
+        )
+
+        if channel_id:
+            try:
+                _slack_send(
+                    channel_id,
+                    "Sorry, I couldn't prepare an answer right now. "
+                    "Please try again in a minute or contact Academy staff.",
+                    str(thread_ts) if thread_ts else None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send Slack fallback message"
+                )
+
     finally:
         db.close()
 
