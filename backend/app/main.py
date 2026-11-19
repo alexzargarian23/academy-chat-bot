@@ -21,16 +21,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Concierge API", description="Academy AI Assistant", version="1.0.0", lifespan=lifespan)
 
+
 cast(Any, app).add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://academy-chat-bot.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 for router_module in [users, admin, conversations, ai, documents, knowledge, programs,
                       applicants, handoffs, students, schedules, payments, attendance,
