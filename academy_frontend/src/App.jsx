@@ -11,43 +11,59 @@ const dateLabel = (v) =>
 // Matches [Source 1], [Source 1, page 3] and the 【 】 variants.
 const pattern = /[\[【]Source\s+(\d+)(?:,\s*page\s+([^\]】]+))?[\]】]/gi;
 
+
 function CitationText({ content = '', sources = [], onDownload, downloading }) {
-  pattern.lastIndex = 0;
+  const safeSources = Array.isArray(sources) ? sources : [];
 
   const sourceMap = new Map(
-    sources.map((s, i) => [String(s.source_id ?? i + 1), s])
+    safeSources.map((source, index) => [
+      String(source.source_id ?? index + 1),
+      source
+    ])
   );
 
   const parts = [];
   let last = 0;
   let match;
 
-  while ((match = pattern.exec(content)) !== null) {
-    if (match.index > last) parts.push(content.slice(last, match.index));
+  pattern.lastIndex = 0;
+
+  while ((match = pattern.exec(content || '')) !== null) {
+    if (match.index > last) {
+      parts.push(content.slice(last, match.index));
+    }
 
     const source = sourceMap.get(match[1]);
+
     if (source?.document_id) {
+      const isDownloading = downloading === source.document_id;
+
       parts.push(
         <button
-          key={`c-${match.index}`}
+          key={`citation-${match.index}`}
           type="button"
           className="citation"
-          disabled={downloading === source.document_id}
+          disabled={isDownloading}
           onClick={() => onDownload(source)}
           title={`Download ${source.document_title || 'source document'}`}
         >
-          {match[0]}
+          {isDownloading ? 'Downloading...' : match[0]}
         </button>
       );
     } else {
       parts.push(match[0]);
     }
+
     last = pattern.lastIndex;
   }
 
-  if (last < content.length) parts.push(content.slice(last));
+  if (last < (content || '').length) {
+    parts.push(content.slice(last));
+  }
+
   return <>{parts}</>;
 }
+
 
 function AuthScreen({ onLogin }) {
   const [step, setStep] = useState('email');
