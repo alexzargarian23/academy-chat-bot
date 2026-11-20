@@ -264,6 +264,9 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState('');
 
+  // This version currently provides the public guest welcome suggestions.
+  const suggestions = SUGGESTIONS_BY_ROLE[user?.role] || SUGGESTIONS_BY_ROLE.guest;
+
   const end = useRef(null);
   const input = useRef(null);
   const openRequest = useRef(0); // guards against stale responses in open()
@@ -569,19 +572,29 @@ export default function App() {
                 related to your Academy experience.
               </p>
               <div className="suggestions">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => {
-                      setDraft(s);
-                      input.current?.focus();
-                    }}
-                  >
-                    {s}
-                    <ArrowUpRight size={15} />
-                  </button>
-                ))}
+                {suggestions.map((s) => {
+                  const Icon = s.icon;
+
+                  return (
+                    <button
+                      key={s.title}
+                      type="button"
+                      onClick={() => {
+                        setDraft(s.question);
+                        input.current?.focus();
+                      }}
+                    >
+                      <span className="suggestion-copy">
+                        <span className="suggestion-heading">
+                          <Icon size={18} />
+                          <strong>{s.title}</strong>
+                        </span>
+                        <small>{s.description}</small>
+                      </span>
+                      <ArrowUpRight size={16} />
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : (
