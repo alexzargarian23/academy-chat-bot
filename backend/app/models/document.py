@@ -1,5 +1,7 @@
 
 from datetime import datetime, timezone
+from sqlalchemy import String, Text, DateTime, ForeignKey, Integer
+
 
 from sqlalchemy import (
     String,
@@ -23,6 +25,11 @@ class Document(Base):
     original_filename: Mapped[str] = mapped_column(String(255))
     storage_filename: Mapped[str] = mapped_column(
         String(255),
+        unique=True
+    )
+    drive_file_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
         unique=True
     )
     file_type: Mapped[str] = mapped_column(String(20))

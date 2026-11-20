@@ -20,7 +20,10 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models import User, Document
 from app.services.knowledge_service import process_document
+from fastapi.responses import FileResponse, StreamingResponse
+from urllib.parse import quote
 
+from app.services.google_drive_service import download_drive_file
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -353,33 +356,90 @@ def get_document(
     return serialize_document(document)
 
 
-def _document_file_response(document: Document, disposition: str) -> FileResponse:
-    if not document.storage_filename:
-        raise HTTPException(status_code=404, detail="Document file not found")
 
-    file_path = (UPLOAD_DIR / document.storage_filename).resolve()
-    if file_path.parent != UPLOAD_DIR.resolve():
-        raise HTTPException(status_code=400, detail="Invalid stored document path")
-    if not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Document file not found")
-
+def _document_file_response(
+    document: Document,
+    disposition: str,
+):
     media_type = ALLOWED_EXTENSIONS.get(
-        file_path.suffix.lower(),
+        Path(document.original_filename).suffix.lower(),
         "application/octet-stream",
     )
+
+    headers = {
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+
+    # Download from Google Drive when a Drive ID exists.
+    if document.drive_file_id:
+        try:
+            content = download_drive_file(document.drive_file_id)
+
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Document file not found in Google Drive",
+            )
+
+        except PermissionError:
+            raise HTTPException(
+                status_code=502,
+                detail="The Academy server cannot access this Drive file",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail="Could not download the document from Google Drive",
+            )
+
+        filename = quote(document.original_filename)
+
+        headers["Content-Disposition"] = (
+            f"{disposition}; filename*=UTF-8''{filename}"
+        )
+
+        return StreamingResponse(
+            iter([content]),
+            media_type=media_type,
+            headers=headers,
+        )
+
+    # Otherwise, use the existing local upload folder.
+    if not document.storage_filename:
+        raise HTTPException(
+            status_code=404,
+            detail="Document file not found",
+        )
+
+    file_path = (
+        UPLOAD_DIR / document.storage_filename
+    ).resolve()
+
+    if file_path.parent != UPLOAD_DIR.resolve():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid stored document path",
+        )
+
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Document file not found",
+        )
+
     return FileResponse(
         path=file_path,
         media_type=media_type,
         filename=document.original_filename,
         content_disposition_type=disposition,
-        headers={
-            "Cache-Control": "private, no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
+        headers=headers,
     )
 
 
-@router.get("/{document_id}/download", response_class=FileResponse)
+
+@router.get("/{document_id}/download")
 def download_document_file(
     document_id: int,
     db: Session = Depends(get_db),
@@ -389,7 +449,7 @@ def download_document_file(
     return _document_file_response(document, "attachment")
 
 
-@router.get("/{document_id}/preview", response_class=FileResponse)
+@router.get("/{document_id}/preview")
 def preview_document_file(
     document_id: int,
     db: Session = Depends(get_db),
