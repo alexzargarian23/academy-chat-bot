@@ -7,3 +7,46 @@
  .citation:hover{color:#4f46c8}
  .citation:disabled{cursor:wait;opacity:.6}
  .history-item>span{flex:1;min-width:0;overflow:hidden}.history-item b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.delete-chat{border:0;background:transparent;color:#9a9daf;padding:2px;opacity:0;flex:none}.history-item:hover .delete-chat,.history-item.selected .delete-chat,.delete-chat:focus{opacity:1}.delete-chat:hover{color:#b64e49}
+
+
+
+/* Guest welcome suggestion cards */
+.suggestions button {
+  min-height: 104px;
+  align-items: flex-start;
+  padding: 16px;
+  border-color: #e5e3f3;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+.suggestions button:hover {
+  transform: translateY(-2px);
+}
+.suggestion-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+}
+.suggestion-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #5d53bd;
+}
+.suggestion-heading strong {
+  color: #42465b;
+  font-size: 12px;
+}
+.suggestion-copy small {
+  color: #898da0;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.suggestions button > svg {
+  margin-left: auto;
+  flex: none;
+}
+@media(max-width:560px) {
+  .suggestions button { min-height: 86px; }
+}

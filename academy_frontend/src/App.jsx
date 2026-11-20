@@ -233,11 +233,22 @@ function AuthScreen({ onLogin }) {
   );
 }
 
-const SUGGESTIONS = [
-  'What programs does the Academy offer?',
-  'How can I apply?',
-  'I need help with my schedule',
-];
+const SUGGESTIONS_BY_ROLE = {
+  guest: [
+    {
+      title: 'Explore our courses',
+      question: 'What courses does the Academy offer?',
+      description: 'Discover our courses, programs and admission requirements.',
+      icon: GraduationCap,
+    },
+    {
+      title: 'Successful graduates',
+      question: 'Show me the successful graduates of the Academy.',
+      description: 'Discover our graduates and their achievements.',
+      icon: Sparkles,
+    },
+  ],
+};
 
 export default function App() {
   const [user, setUser] = useState(null);
