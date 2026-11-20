@@ -32,7 +32,11 @@ def download_drive_file(file_id: str) -> bytes:
     )
 
     try:
-        request = service.files().get_media(fileId=file_id)
+        request = service.files().get_media(
+            fileId=file_id,
+            supportsAllDrives=True,
+        )
+
         buffer = io.BytesIO()
         downloader = MediaIoBaseDownload(buffer, request)
 
@@ -44,11 +48,15 @@ def download_drive_file(file_id: str) -> bytes:
 
     except HttpError as error:
         if error.resp.status == 404:
-            raise FileNotFoundError("Google Drive file not found") from error
+            raise FileNotFoundError(
+                "Google Drive file not found or not accessible"
+            ) from error
 
         if error.resp.status == 403:
             raise PermissionError(
                 "The service account cannot access this Google Drive file"
             ) from error
 
-        raise RuntimeError("Google Drive download failed") from error
+        raise RuntimeError(
+            "Google Drive download failed"
+        ) from error
