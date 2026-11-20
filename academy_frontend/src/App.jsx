@@ -1,242 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  GraduationCap, MessageCircle, Plus, Search, Send, LogOut, Sparkles,
-  UserRound, PanelLeftClose, PanelLeftOpen, ArrowUpRight, Trash2, X,
+  GraduationCap, MessageCircle, Plus, Search, Send, LogOut, Sparkles, PanelLeftClose,
+  PanelLeftOpen, Trash2, X, Menu, ArrowDown, RotateCw, FileText, CalendarDays, CreditCard,
 } from 'lucide-react';
-import { auth, chats, clearToken, downloadDocument, saveToken, token } from './api';
-
-const dateLabel = (v) =>
-  new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-const asArray = (v) => (Array.isArray(v) ? v : []);
-
-// Matches [Source 1], [Source 1, page 3] and the 【 】 variants.
-const pattern = /[\[【]Source\s+(\d+)(?:,\s*page\s+([^\]】]+))?[\]】]/gi;
-
-function CitationText({ content, sources, onDownload, downloading }) {
-  const text = content ?? '';
-  const sourceMap = new Map(
-    asArray(sources).map((source, index) => [
-      String(source.source_id ?? index + 1),
-      source,
-    ])
-  );
-
-  const parts = [];
-  let last = 0;
-  let match;
-
-  pattern.lastIndex = 0;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > last) {
-      parts.push(text.slice(last, match.index));
-    }
-
-    const source = sourceMap.get(match[1]);
-
-    if (source?.document_id) {
-      const isDownloading = downloading === source.document_id;
-
-      parts.push(
-        <button
-          key={`citation-${match.index}`}
-          type="button"
-          className="citation"
-          disabled={isDownloading}
-          onClick={() => onDownload(source)}
-          title={`Download ${source.document_title || 'source document'}`}
-        >
-          {isDownloading ? 'Downloading...' : match[0]}
-        </button>
-      );
-    } else {
-      parts.push(match[0]);
-    }
-
-    last = pattern.lastIndex;
-  }
-
-  if (last < text.length) {
-    parts.push(text.slice(last));
-  }
-
-  return <>{parts}</>;
-}
-
-function AuthScreen({ onLogin }) {
-  const [step, setStep] = useState('email');
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function continueWithEmail(e) {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const result = await auth.checkEmail(email.trim());
-      setStep(result.registered ? 'login' : 'register');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitAccount(e) {
-    e.preventDefault();
-    setError('');
-    if (step === 'register' && password !== confirm) {
-      setError('The passwords do not match.');
-      return;
-    }
-    setBusy(true);
-    try {
-      if (step === 'register') await auth.register(name.trim(), email.trim(), password);
-      const result = await auth.login(email.trim(), password);
-      saveToken(result.access_token);
-      onLogin(await auth.me());
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function back() {
-    setStep('email');
-    setPassword('');
-    setConfirm('');
-    setError('');
-  }
-
-  const title =
-    step === 'email' ? 'Welcome to the Academy'
-      : step === 'login' ? 'Welcome back'
-        : 'Create your account';
-
-  const subtitle =
-    step === 'email' ? 'Enter your email address to get started.'
-      : step === 'login' ? 'This email already has an account. Enter your password to continue.'
-        : 'Your email is not registered yet. Create an account to start chatting.';
-
-  return (
-    <main className="auth">
-      <section className="brand-side">
-        <div className="logo">
-          <span className="mark"><GraduationCap /></span>Academy <i>Concierge</i>
-        </div>
-        <div className="brand-copy">
-          <small>YOUR ACADEMY, ONE CONVERSATION AWAY</small>
-          <h1>Guidance that<br /><em>moves you forward.</em></h1>
-          <p>Ask questions, explore programs, and get support throughout your Academy journey.</p>
-          <div className="tagline"><Sparkles size={16} /> Your personal Academy assistant</div>
-        </div>
-        <footer>ACADEMY CONCIERGE · STUDENT SUPPORT</footer>
-      </section>
-
-      <section className="auth-side">
-        <div className="auth-card">
-          <div className="mobile-logo">
-            <span className="mark"><GraduationCap /></span> Academy Concierge
-          </div>
-          <small className="eyebrow">
-            {step === 'email' ? 'WELCOME' : 'CONTINUE TO YOUR ACCOUNT'}
-          </small>
-          <h2>{title}</h2>
-          <p>{subtitle}</p>
-
-          {step === 'email' ? (
-            <form onSubmit={continueWithEmail}>
-              <label>
-                Email address
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  autoComplete="email"
-                />
-              </label>
-              {error && <div className="error">{error}</div>}
-              <button className="primary" disabled={busy}>
-                {busy ? 'Checking…' : 'Continue'} <ArrowUpRight size={17} />
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={submitAccount}>
-              {step === 'register' && (
-                <label>
-                  Full name
-                  <input
-                    required
-                    minLength="2"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Your full name"
-                    autoComplete="name"
-                  />
-                </label>
-              )}
-              <label>
-                Email address
-                <input type="email" value={email} readOnly />
-              </label>
-              <label>
-                {step === 'register' ? 'Create password' : 'Password'}
-                <input
-                  type="password"
-                  minLength="8"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={step === 'register' ? 'At least 8 characters' : 'Enter your password'}
-                  autoComplete={step === 'register' ? 'new-password' : 'current-password'}
-                />
-              </label>
-              {step === 'register' && (
-                <label>
-                  Confirm password
-                  <input
-                    type="password"
-                    minLength="8"
-                    required
-                    value={confirm}
-                    onChange={(e) => setConfirm(e.target.value)}
-                    placeholder="Re-enter your password"
-                    autoComplete="new-password"
-                  />
-                </label>
-              )}
-              {error && <div className="error">{error}</div>}
-              <button className="primary" disabled={busy}>
-                {busy ? 'Please wait…' : step === 'login' ? 'Sign in' : 'Create account'}{' '}
-                <ArrowUpRight size={17} />
-              </button>
-              <button type="button" className="back-link" onClick={back}>
-                Use a different email
-              </button>
-            </form>
-          )}
-
-          <div className="secure">
-            ● Your password is securely hashed and never visible to Academy staff.
-          </div>
-        </div>
-      </section>
-    </main>
-  );
-}
+import { auth, chats, clearToken, downloadDocument, token } from './api';
+import AuthScreen from './components/AuthScreen';
+import Message from './components/Message';
+import {
+  asArray, dateLabel, groupByDate, readFlag, writeFlag, useMediaQuery,
+} from './utils';
 
 const SUGGESTIONS = [
-  'What programs does the Academy offer?',
-  'How can I apply?',
-  'I need help with my schedule',
+  { icon: GraduationCap, text: 'What programs does the Academy offer?' },
+  { icon: FileText, text: 'How can I apply?' },
+  { icon: CalendarDays, text: 'I need help with my schedule' },
+  { icon: CreditCard, text: 'How do payments work?' },
 ];
 
 export default function App() {
@@ -250,22 +28,28 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(null);
   const [error, setError] = useState('');
-  const [collapsed, setCollapsed] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => readFlag('sidebar-collapsed'));
+  const [drawer, setDrawer] = useState(false);
+  const [confirmId, setConfirmId] = useState(null);
+  const [showJump, setShowJump] = useState(false);
   const [search, setSearch] = useState('');
 
+  const mobile = useMediaQuery('(max-width: 800px)');
+  const rail = collapsed && !mobile;
+
+  const stage = useRef(null);
   const end = useRef(null);
   const input = useRef(null);
+  const stick = useRef(true); // keep pinned to the newest message
+  const lastQuestion = useRef('');
   const openRequest = useRef(0); // guards against stale responses in open()
 
   // Restore session
   useEffect(() => {
     (async () => {
       if (token()) {
-        try {
-          setUser(await auth.me());
-        } catch {
-          clearToken();
-        }
+        try { setUser(await auth.me()); } catch { clearToken(); }
       }
       setChecking(false);
     })();
@@ -273,9 +57,11 @@ export default function App() {
 
   const open = useCallback(async (id) => {
     const req = ++openRequest.current;
+    stick.current = true;
     setActive(id);
     setLoading(true);
     setError('');
+    setFailed(false);
     try {
       const list = await chats.messages(id);
       if (req === openRequest.current) setMessages(asArray(list));
@@ -300,9 +86,23 @@ export default function App() {
     })();
   }, [user, open]);
 
+  // Auto-scroll only while the reader is near the bottom
   useEffect(() => {
+    if (stick.current) end.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, busy, loading]);
+
+  function onStageScroll() {
+    const el = stage.current;
+    if (!el) return;
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stick.current = gap < 120;
+    setShowJump(gap > 300);
+  }
+
+  function jumpToLatest() {
+    stick.current = true;
     end.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, busy]);
+  }
 
   // Auto-grow the textarea
   useEffect(() => {
@@ -312,6 +112,21 @@ export default function App() {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [draft]);
 
+  // Close the drawer with Escape
+  useEffect(() => {
+    if (!drawer) return undefined;
+    const onKey = (e) => e.key === 'Escape' && setDrawer(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawer]);
+
+  function toggleCollapsed() {
+    setCollapsed((c) => {
+      writeFlag('sidebar-collapsed', !c);
+      return !c;
+    });
+  }
+
   function newChat() {
     openRequest.current++; // ignore any in-flight open()
     setLoading(false);
@@ -319,17 +134,21 @@ export default function App() {
     setMessages([]);
     setDraft('');
     setError('');
+    setFailed(false);
+    setDrawer(false);
     input.current?.focus();
   }
 
-  async function send(e) {
-    e?.preventDefault();
-    const q = draft.trim();
+  async function ask(text) {
+    const q = text.trim();
     if (!q || busy) return;
 
+    lastQuestion.current = q;
+    stick.current = true;
     setDraft('');
     setBusy(true);
     setError('');
+    setFailed(false);
 
     const userMsg = {
       id: crypto.randomUUID(),
@@ -365,6 +184,7 @@ export default function App() {
       setMessages((m) => m.filter((x) => x.id !== userMsg.id));
       setDraft(q);
       setError(err.message);
+      setFailed(true);
       setBusy(false);
       return;
     }
@@ -378,8 +198,14 @@ export default function App() {
     setBusy(false);
   }
 
+  function send(e) {
+    e?.preventDefault();
+    ask(draft);
+  }
+
   async function downloadCitation(source) {
     setError('');
+    setFailed(false);
     setDownloading(source.document_id);
     try {
       await downloadDocument(source.document_id);
@@ -391,11 +217,9 @@ export default function App() {
   }
 
   async function removeConversation(id) {
-    const conversation = items.find((x) => x.id === id);
-    const label = conversation?.title || 'New conversation';
-    if (!window.confirm(`Delete “${label}”? This cannot be undone.`)) return;
-
+    setConfirmId(null);
     setError('');
+    setFailed(false);
     try {
       await chats.remove(id);
       const remaining = items.filter((x) => x.id !== id);
@@ -416,6 +240,7 @@ export default function App() {
     setItems([]);
     setMessages([]);
     setActive(null);
+    setDrawer(false);
   }
 
   function onComposerKeyDown(e) {
@@ -425,46 +250,54 @@ export default function App() {
     }
   }
 
-  const filtered = useMemo(() => {
-    const term = search.toLowerCase();
-    return items.filter((x) =>
-      `${x.title || 'new conversation'} ${dateLabel(x.created_at)}`
-        .toLowerCase()
-        .includes(term)
+  const groups = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    const filtered = items.filter((x) =>
+      `${x.title || 'new conversation'} ${dateLabel(x.created_at)}`.toLowerCase().includes(term)
     );
+    return groupByDate(filtered);
   }, [items, search]);
 
   if (checking) return <div className="loading-screen">Loading your workspace…</div>;
   if (!user) return <AuthScreen onLogin={setUser} />;
 
   const initial = (user.full_name || user.email).slice(0, 1).toUpperCase();
+  const activeTitle = items.find((x) => x.id === active)?.title;
+  const empty = messages.length === 0 && !loading;
 
   return (
-    <div className={`shell ${collapsed ? 'collapsed' : ''}`}>
-      <aside className="sidebar">
+    <div className={`shell ${rail ? 'collapsed' : ''} ${drawer ? 'drawer-open' : ''}`}>
+      {drawer && <div className="backdrop" onClick={() => setDrawer(false)} aria-hidden="true" />}
+
+      <aside className="sidebar" aria-label="Conversations">
         <div className="side-top">
           <div className="logo">
             <span className="mark"><GraduationCap /></span>
-            {!collapsed && <>Academy <i>Concierge</i></>}
+            {!rail && <>Academy <i>Concierge</i></>}
           </div>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            onClick={() => setCollapsed(!collapsed)}
-          >
-            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-          </button>
+          {mobile ? (
+            <button type="button" className="icon-btn" aria-label="Close menu" onClick={() => setDrawer(false)}>
+              <X />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={rail ? 'Expand sidebar' : 'Collapse sidebar'}
+              onClick={toggleCollapsed}
+            >
+              {rail ? <PanelLeftOpen /> : <PanelLeftClose />}
+            </button>
+          )}
         </div>
 
-        <button type="button" className="new-chat" onClick={newChat}>
+        <button type="button" className="new-chat" onClick={newChat} aria-label="New conversation">
           <Plus size={18} />
-          {!collapsed && 'New conversation'}
+          {!rail && 'New conversation'}
         </button>
 
-        {!collapsed && (
+        {!rail && (
           <>
-            <div className="history-title">YOUR HISTORY</div>
             <div className="search">
               <Search size={15} />
               <input
@@ -474,62 +307,71 @@ export default function App() {
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <div className="history">
-              {filtered.length ? (
-                filtered.map((c) => (
-                  <div
-                    key={c.id}
-                    className={`history-item ${active === c.id ? 'selected' : ''}`}
-                    role="button"
-                    tabIndex="0"
-                    onClick={() => open(c.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') open(c.id);
-                    }}
-                  >
-                    <MessageCircle size={16} />
-                    <span>
-                      <b>{c.title || 'New conversation'}</b>
-                      <small>{dateLabel(c.created_at)}</small>
-                    </span>
-                    <button
-                      className="delete-chat"
-                      type="button"
-                      title="Delete conversation"
-                      aria-label={`Delete ${c.title || 'conversation'}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeConversation(c.id);
-                      }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+
+            <nav className="history">
+              {groups.length ? (
+                groups.map(([label, list]) => (
+                  <section key={label}>
+                    <h3 className="history-group">{label}</h3>
+                    {list.map((c) => (
+                      <div key={c.id} className={`history-item ${active === c.id ? 'selected' : ''}`}>
+                        {confirmId === c.id ? (
+                          <div className="confirm-row" role="group" aria-label="Confirm delete">
+                            <span>Delete this chat?</span>
+                            <button type="button" className="danger-btn" onClick={() => removeConversation(c.id)}>
+                              Delete
+                            </button>
+                            <button type="button" className="ghost-btn" onClick={() => setConfirmId(null)}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="history-open"
+                              aria-current={active === c.id ? 'true' : undefined}
+                              onClick={() => { open(c.id); setDrawer(false); }}
+                            >
+                              <MessageCircle size={16} />
+                              <span>
+                                <b>{c.title || 'New conversation'}</b>
+                                <small>{dateLabel(c.created_at)}</small>
+                              </span>
+                            </button>
+                            <button
+                              className="delete-chat"
+                              type="button"
+                              title="Delete conversation"
+                              aria-label={`Delete ${c.title || 'conversation'}`}
+                              onClick={() => setConfirmId(c.id)}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </section>
                 ))
               ) : (
                 <p className="empty">
-                  {search ? 'No matching conversations' : 'Your conversations will appear here.'}
+                  {search ? 'No conversations match your search.' : 'Your conversations will appear here.'}
                 </p>
               )}
-            </div>
+            </nav>
           </>
         )}
 
         <div className="account">
           <div className="avatar">{initial}</div>
-          {!collapsed && (
+          {!rail && (
             <div className="account-info">
               <b>{user.full_name}</b>
               <small>{user.email}</small>
             </div>
           )}
-          <button
-            type="button"
-            className="icon-btn logout"
-            title="Sign out"
-            aria-label="Sign out"
-            onClick={logout}
-          >
+          <button type="button" className="icon-btn logout" title="Sign out" aria-label="Sign out" onClick={logout}>
             <LogOut size={17} />
           </button>
         </div>
@@ -537,95 +379,51 @@ export default function App() {
 
       <main className="main">
         <header className="topbar">
-          <div>
-            <span className="online" /> Academy Assistant <span className="slash">/</span>
-            <span className="muted">Student support</span>
-          </div>
-          <div className="top-user">
-            {user.full_name}
-            <span className="avatar small">{(user.full_name || 'U').slice(0, 1).toUpperCase()}</span>
+          <div className="topbar-left">
+            <button type="button" className="icon-btn menu-btn" aria-label="Open menu" onClick={() => setDrawer(true)}>
+              <Menu />
+            </button>
+            <span className="online" aria-hidden="true" />
+            <span className="topbar-title">{activeTitle || 'Academy assistant'}</span>
+            <span className="muted topbar-sub">Student support</span>
           </div>
         </header>
 
-        <section className="stage">
-          {messages.length === 0 && !loading ? (
+        <section className="stage" ref={stage} onScroll={onStageScroll}>
+          {empty ? (
             <div className="welcome">
               <div className="welcome-icon"><Sparkles /></div>
-              <small className="eyebrow">ACADEMY CONCIERGE</small>
-              <h1>How can we help<br /><em>you today?</em></h1>
+              <h1>How can we help you today?</h1>
               <p>
                 Ask about programs, admissions, schedules, payments, or anything else
-                related to your Academy experience.
+                about your Academy experience.
               </p>
               <div className="suggestions">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => {
-                      setDraft(s);
-                      input.current?.focus();
-                    }}
-                  >
-                    {s}
-                    <ArrowUpRight size={15} />
+                {SUGGESTIONS.map(({ icon: Icon, text }) => (
+                  <button key={text} type="button" onClick={() => ask(text)}>
+                    <Icon size={17} />
+                    <span>{text}</span>
                   </button>
                 ))}
               </div>
             </div>
           ) : (
-            <div className="messages">
+            <div className="messages" role="log" aria-live="polite">
               {loading ? (
                 <p className="loading-inline">Loading conversation…</p>
               ) : (
                 messages.map((m, i) => (
-                  <div
-                    key={m.id ?? i}
-                    className={`message ${m.sender === 'user' ? 'mine' : ''}`}
-                  >
-                    {m.sender !== 'user' && (
-                      <div className="bot-avatar"><Sparkles size={16} /></div>
-                    )}
-                    <div className="message-body">
-                      <div className="meta">
-                        {m.sender === 'user' ? 'You' : 'Academy Assistant'}{' '}
-                        <time>
-                          {m.created_at
-                            ? new Date(m.created_at).toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : ''}
-                        </time>
-                      </div>
-                      <div className="bubble">
-                        {m.sender === 'assistant' ? (
-                          <CitationText
-                            content={m.content}
-                            sources={m.sources}
-                            onDownload={downloadCitation}
-                            downloading={downloading}
-                          />
-                        ) : (
-                          m.content
-                        )}
-                      </div>
-                      {m.handoff_required && (
-                        <small className="handoff">
-                          Your request has been flagged for human assistance.
-                        </small>
-                      )}
-                    </div>
-                    {m.sender === 'user' && (
-                      <div className="avatar user-avatar"><UserRound size={16} /></div>
-                    )}
-                  </div>
+                  <Message key={m.id ?? i} m={m} onDownload={downloadCitation} downloading={downloading} />
                 ))
               )}
               {busy && (
                 <div className="message">
                   <div className="bot-avatar"><Sparkles size={16} /></div>
-                  <div className="bubble typing">•••</div>
+                  <div className="bubble">
+                    <span className="typing" role="status" aria-label="The assistant is typing">
+                      <i /><i /><i />
+                    </span>
+                  </div>
                 </div>
               )}
               <div ref={end} />
@@ -633,12 +431,25 @@ export default function App() {
           )}
         </section>
 
+        {showJump && !empty && (
+          <button type="button" className="jump" onClick={jumpToLatest}>
+            <ArrowDown size={15} /> Latest
+          </button>
+        )}
+
         {error && (
-          <div className="error chat-error">
-            {error}
-            <button type="button" aria-label="Dismiss error" onClick={() => setError('')}>
-              <X size={15} />
-            </button>
+          <div className="error chat-error" role="alert">
+            <span>{error}</span>
+            <div className="chat-error-actions">
+              {failed && (
+                <button type="button" onClick={() => ask(lastQuestion.current)}>
+                  <RotateCw size={14} /> Try again
+                </button>
+              )}
+              <button type="button" aria-label="Dismiss error" onClick={() => setError('')}>
+                <X size={15} />
+              </button>
+            </div>
           </div>
         )}
 
@@ -646,7 +457,7 @@ export default function App() {
           <form className="composer" onSubmit={send}>
             <textarea
               ref={input}
-              rows="1"
+              rows={1}
               aria-label="Message"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -658,7 +469,7 @@ export default function App() {
             </button>
           </form>
           <div className="disclaimer">
-            Academy Concierge can make mistakes. Please verify important information.
+            Enter to send, Shift+Enter for a new line. Answers can contain mistakes, so check important details.
           </div>
         </div>
       </main>
