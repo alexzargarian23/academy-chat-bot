@@ -451,8 +451,6 @@ export default function App() {
   if (checking) return <div className="loading-screen">Loading your workspace…</div>;
   if (!user) return <AuthScreen onLogin={setUser} />;
 
-  const initial = (user.full_name || user.email).slice(0, 1).toUpperCase();
-
   return (
     <div className={`shell ${collapsed ? 'collapsed' : ''}`}>
       <aside className="sidebar">
@@ -530,7 +528,6 @@ export default function App() {
         )}
 
         <div className="account">
-          <div className="avatar">{initial}</div>
           {!collapsed && (
             <div className="account-info">
               <b>{user.full_name}</b>
