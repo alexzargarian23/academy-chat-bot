@@ -50,3 +50,139 @@
 @media(max-width:560px) {
   .suggestions button { min-height: 86px; }
 }
+
+
+/* ===== Academy Concierge layout fix ===== */
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+.shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.sidebar {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.topbar {
+  width: 100%;
+  min-width: 0;
+  gap: 12px;
+}
+
+.topbar > div:first-child {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.top-user {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.stage {
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/* Tablet and mobile */
+@media (max-width: 800px) {
+  .sidebar {
+    width: 60px;
+    padding: 14px 8px 12px;
+  }
+
+  .sidebar .logo {
+    display: none;
+  }
+
+  .side-top {
+    justify-content: center;
+  }
+
+  .side-top .icon-btn {
+    display: none;
+  }
+
+  .new-chat {
+    width: 42px;
+    margin: 20px auto;
+    font-size: 0;
+  }
+
+  .history-title,
+  .search,
+  .history,
+  .account-info {
+    display: none;
+  }
+
+  .account {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .logout {
+    margin: 0;
+  }
+
+  .topbar {
+    padding: 0 12px;
+    height: 57px;
+    font-size: 11px;
+  }
+
+  .topbar .muted,
+  .topbar .slash {
+    display: none;
+  }
+
+  .messages {
+    padding: 20px 12px;
+  }
+}
+
+/* Small screens */
+@media (max-width: 480px) {
+  .welcome {
+    padding: 55px 15px 25px;
+  }
+
+  .welcome h1 {
+    font-size: 34px;
+  }
+
+  .suggestions {
+    grid-template-columns: 1fr;
+  }
+
+  .message-body {
+    max-width: 88%;
+  }
+
+  .composer-wrap {
+    padding: 9px 10px 12px;
+  }
+}
