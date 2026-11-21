@@ -1,4 +1,3 @@
-
 import uuid
 from pathlib import Path
 
@@ -47,6 +46,7 @@ ROLE_DOCUMENT_VISIBILITY = {
     "admin": ALLOWED_VISIBILITY,
     "staff": ALLOWED_VISIBILITY,
     "student": ALLOWED_VISIBILITY,
+    "guest": {"public"},
 }
 
 
@@ -59,13 +59,14 @@ def require_document_manager(user: User):
 
 
 def _allowed_visibility_for(user: User) -> set[str]:
-    return ROLE_DOCUMENT_VISIBILITY.get(user.role, set())
+    role = (user.role or "").strip().lower()
+    return ROLE_DOCUMENT_VISIBILITY.get(role, set())
 
 
 def get_accessible_document(
-    document_id: int,
-    db: Session,
-    current_user: User,
+        document_id: int,
+        db: Session,
+        current_user: User,
 ) -> Document:
     query = db.query(Document).filter(
         Document.id == document_id
@@ -103,11 +104,11 @@ def serialize_document(document: Document) -> dict:
 
 
 def validate_upload(
-    filename: str,
-    content: bytes,
-    visibility: str,
-    language: str,
-    current_user: User,
+        filename: str,
+        content: bytes,
+        visibility: str,
+        language: str,
+        current_user: User,
 ):
     extension = Path(filename).suffix.lower()
 
@@ -171,12 +172,12 @@ def validate_upload(
     status_code=status.HTTP_201_CREATED,
 )
 def upload_document(
-    file: UploadFile = File(...),
-    title: str = Form(...),
-    language: str = Form("en"),
-    visibility: str = Form("public"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        file: UploadFile = File(...),
+        title: str = Form(...),
+        language: str = Form("en"),
+        visibility: str = Form("public"),
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     require_document_manager(current_user)
 
@@ -257,14 +258,14 @@ def upload_document(
 
 @router.get("/")
 def list_documents(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=10, ge=1, le=100),
-    search: str | None = Query(default=None, max_length=255),
-    document_status: str | None = Query(default=None, alias="status"),
-    visibility: str | None = Query(default=None),
-    language: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=10, ge=1, le=100),
+        search: str | None = Query(default=None, max_length=255),
+        document_status: str | None = Query(default=None, alias="status"),
+        visibility: str | None = Query(default=None),
+        language: str | None = Query(default=None),
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     require_document_manager(current_user)
 
@@ -341,9 +342,9 @@ def list_documents(
 
 @router.get("/{document_id}")
 def get_document(
-    document_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        document_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     require_document_manager(current_user)
 
@@ -356,10 +357,9 @@ def get_document(
     return serialize_document(document)
 
 
-
 def _document_file_response(
-    document: Document,
-    disposition: str,
+        document: Document,
+        disposition: str,
 ):
     media_type = ALLOWED_EXTENSIONS.get(
         Path(document.original_filename).suffix.lower(),
@@ -414,7 +414,7 @@ def _document_file_response(
         )
 
     file_path = (
-        UPLOAD_DIR / document.storage_filename
+            UPLOAD_DIR / document.storage_filename
     ).resolve()
 
     if file_path.parent != UPLOAD_DIR.resolve():
@@ -438,12 +438,11 @@ def _document_file_response(
     )
 
 
-
 @router.get("/{document_id}/download")
 def download_document_file(
-    document_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        document_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     document = get_accessible_document(document_id, db, current_user)
     return _document_file_response(document, "attachment")
@@ -451,9 +450,9 @@ def download_document_file(
 
 @router.get("/{document_id}/preview")
 def preview_document_file(
-    document_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        document_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     document = get_accessible_document(document_id, db, current_user)
     return _document_file_response(document, "inline")
@@ -464,9 +463,9 @@ def preview_document_file(
 # ---------------------------------------------------------
 
 def run_document_processing(
-    document_id: int,
-    db: Session,
-    current_user: User,
+        document_id: int,
+        db: Session,
+        current_user: User,
 ):
     require_document_manager(current_user)
 
@@ -495,9 +494,9 @@ def run_document_processing(
 
 @router.post("/{document_id}/process")
 def process_uploaded_document(
-    document_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        document_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     return run_document_processing(
         document_id,
@@ -512,9 +511,9 @@ def process_uploaded_document(
 
 @router.post("/{document_id}/reprocess")
 def reprocess_uploaded_document(
-    document_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        document_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     return run_document_processing(
         document_id,
@@ -529,9 +528,9 @@ def reprocess_uploaded_document(
 
 @router.delete("/{document_id}")
 def delete_document(
-    document_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+        document_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     require_document_manager(current_user)
 
@@ -543,7 +542,7 @@ def delete_document(
 
     stored_filename = document.storage_filename
     file_path = (
-        UPLOAD_DIR / stored_filename
+            UPLOAD_DIR / stored_filename
     ).resolve() if stored_filename else None
 
     if file_path and file_path.parent != UPLOAD_DIR.resolve():
@@ -572,3 +571,4 @@ def delete_document(
         "message": "Document deleted successfully",
         "document_id": document_id,
     }
+
