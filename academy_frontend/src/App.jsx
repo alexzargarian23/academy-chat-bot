@@ -1,4 +1,3 @@
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './email-assistant.css';
 import {
@@ -881,7 +880,14 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
   const [items, setItems] = useState([]);
-  const [active, setActive] = useState(null);
+  const [active, setActive] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('academy_active_conversation');
+      return saved ? Number(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -905,6 +911,25 @@ export default function App() {
   const viewRef = useRef(view);
   activeRef.current = active;
   viewRef.current = view;
+
+  // Persist the currently selected conversation for the next page reload.
+  // Do not clear it while the authentication state is still being restored.
+  useEffect(() => {
+    if (!user) return;
+
+    try {
+      if (active !== null && active !== undefined) {
+        window.localStorage.setItem(
+          'academy_active_conversation',
+          String(active)
+        );
+      } else {
+        window.localStorage.removeItem('academy_active_conversation');
+      }
+    } catch {
+      // The chat still works if browser storage is unavailable.
+    }
+  }, [active, user]);
 
   // Restore session
   useEffect(() => {
@@ -961,18 +986,49 @@ export default function App() {
     }
   }, []);
 
-  // Initial load after login: fetch the list and open the most recent chat
+  // Initial load after login: restore the last conversation the user viewed.
+  // If it no longer exists (for example, it was deleted), fall back to the
+  // most recent available conversation.
   useEffect(() => {
     if (!user) return;
+
+    let cancelled = false;
+
     (async () => {
       try {
         const list = asArray(await chats.list());
+        if (cancelled) return;
+
         setItems(list);
-        if (list[0]) await open(list[0].id);
+
+        if (!list.length) {
+          setActive(null);
+          setMessages([]);
+          return;
+        }
+
+        let savedId = null;
+        try {
+          const stored = window.localStorage.getItem('academy_active_conversation');
+          savedId = stored ? Number(stored) : null;
+        } catch {
+          // Fall back to the most recent conversation if storage is unavailable.
+        }
+
+        const savedConversation = list.find(
+          (conversation) => Number(conversation.id) === savedId
+        );
+        const conversationToOpen = savedConversation || list[0];
+
+        await open(conversationToOpen.id);
       } catch (e) {
-        setError(e.message);
+        if (!cancelled) setError(e.message);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [user, open]);
 
   // Refresh unread indicators while the user is signed in, including updates
@@ -1124,6 +1180,11 @@ export default function App() {
 
   function logout() {
     clearToken();
+    try {
+      window.localStorage.removeItem('academy_active_conversation');
+    } catch {
+      // Ignore unavailable browser storage.
+    }
     openRequest.current++;
     setUser(null);
     setItems([]);
