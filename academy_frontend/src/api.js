@@ -166,20 +166,23 @@ export const chats = {
 // GMAIL EMAIL ASSISTANT
 // ─────────────────────────────────────
 
+
 export const emailAssistant = {
+  // Check Gmail connection
   connection: () =>
     api('/email-assistant/connection'),
 
+  // Start Google OAuth authorization
   connect: () =>
-    api('/email-assistant/connect', {
-      method: 'POST',
-    }),
+    api('/email-assistant/connect'),
 
+  // Synchronize Gmail inbox
   sync: () =>
     api('/email-assistant/sync', {
       method: 'POST',
     }),
 
+  // Retrieve emails
   messages: (status) => {
     const query = status
       ? `?status_filter=${encodeURIComponent(status)}`
@@ -188,24 +191,29 @@ export const emailAssistant = {
     return api(`/email-assistant/messages${query}`);
   },
 
+  // Generate AI reply
   generateDraft: (id) =>
     api(`/email-assistant/messages/${id}/draft`, {
       method: 'POST',
     }),
 
+  // Update reply draft
   updateDraft: (id, reply_draft) =>
     api(`/email-assistant/messages/${id}/draft`, {
       method: 'PUT',
       body: JSON.stringify({ reply_draft }),
     }),
 
+  // Approve reply
   approve: (id) =>
     api(`/email-assistant/messages/${id}/approve`, {
       method: 'POST',
     }),
 
+  // Send approved reply
   send: (id) =>
     api(`/email-assistant/messages/${id}/send`, {
       method: 'POST',
     }),
 };
+
