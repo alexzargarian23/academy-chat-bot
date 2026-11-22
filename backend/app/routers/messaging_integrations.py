@@ -462,8 +462,6 @@ def _telegram_auth_response(
     display_name: str,
     language: str,
     question: str,
-    channel_destination: str | None = None,
-    channel_thread_id: str | None = None,
 ) -> str | None:
     if provider != "telegram":
         return None
@@ -472,16 +470,7 @@ def _telegram_auth_response(
 
     if command == "/logout":
         guest = _guest_user(db, provider, external_id, display_name)
-        _bind_identity(
-            db,
-            identity,
-            guest,
-            provider,
-            language,
-            authenticated=False,
-            channel_destination=channel_destination,
-            channel_thread_id=channel_thread_id,
-        )
+        _bind_identity(db, identity, guest, provider, language, authenticated=False)
         db.commit()
         return "You have been logged out. You can still ask about public Academy information."
 
@@ -536,16 +525,7 @@ def _telegram_auth_response(
             db.commit()
             return "Incorrect password. Please try again."
 
-        _bind_identity(
-            db,
-            identity,
-            user,
-            provider,
-            language,
-            authenticated=True,
-            channel_destination=channel_destination,
-            channel_thread_id=channel_thread_id,
-        )
+        _bind_identity(db, identity, user, provider, language, authenticated=True)
         db.commit()
         return "You are authenticated. You can now access the data permitted for your Academy role."
 
@@ -588,15 +568,7 @@ def _process_inbound(
     )
 
     auth_response = _telegram_auth_response(
-        db,
-        identity,
-        provider,
-        external_id,
-        display_name,
-        language,
-        question,
-        channel_destination=channel_destination,
-        channel_thread_id=channel_thread_id,
+        db, identity, provider, external_id, display_name, language, question
     )
     if auth_response is not None:
         event_record.status = "processed"
@@ -621,8 +593,12 @@ def _process_inbound(
     db.flush()
 
     result = run_assistant(question[:2000], db, user, conversation, history)
+    handoff_required = bool(result.get("handoff_required"))
     answer = result.get("answer") or "I'm sorry, I couldn't prepare a response. Please contact Academy staff."
-    sources = result.get("sources") or []
+
+    # A human handoff is not a grounded AI answer. Never persist or send RAG
+    # source attachments with the handoff confirmation on Telegram or Slack.
+    sources = [] if handoff_required else (result.get("sources") or [])
 
     db.add(Message(
         conversation_id=conversation.id,
@@ -634,7 +610,12 @@ def _process_inbound(
     event_record.response_text = answer[:12000]
     db.commit()
 
-    return {"answer": answer, "sources": sources, "user_id": user.id}
+    return {
+        "answer": answer,
+        "sources": sources,
+        "user_id": user.id,
+        "handoff_required": handoff_required,
+    }
 
 
 def _process_slack_event_background(payload: dict[str, Any], event_id: str) -> None:
@@ -832,3 +813,4 @@ def send_staff_reply_to_channel(db: Session, conversation: Conversation, content
             conversation.channel_thread_id or None,
         )
     # Website conversations need no external delivery.
+
