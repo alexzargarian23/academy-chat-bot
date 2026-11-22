@@ -515,6 +515,43 @@ def _telegram_auth_response(
     return None
 
 
+def _is_handoff_response(result: dict[str, Any], answer: str) -> bool:
+    """Return True when the assistant response represents a human handoff.
+
+    Handoff responses must still be delivered to the messaging channel, but
+    retrieved RAG documents should not be attached to that notification.
+    Prefer explicit metadata from run_assistant; retain a text fallback for
+    assistant-service versions that only return the user-facing answer.
+    """
+    for key in (
+        "handoff_created",
+        "handoff_requested",
+        "requires_handoff",
+        "is_handoff",
+        "human_handoff",
+    ):
+        if result.get(key) is True:
+            return True
+
+    handoff_value = result.get("handoff")
+    if handoff_value is True:
+        return True
+    if isinstance(handoff_value, dict) and handoff_value:
+        return True
+
+    normalized = re.sub(r"\\s+", " ", (answer or "").strip().lower())
+    handoff_phrases = (
+        "your handoff request has been submitted",
+        "handoff request has been submitted",
+        "your handoff has been submitted",
+        "handoff has been submitted",
+        "a handoff has been created",
+        "handoff request was created",
+        "a staff member will contact you",
+    )
+    return any(phrase in normalized for phrase in handoff_phrases)
+
+
 def _process_inbound(
     db: Session,
     provider: str,
@@ -575,6 +612,7 @@ def _process_inbound(
     result = run_assistant(question[:2000], db, user, conversation, history)
     answer = result.get("answer") or "I'm sorry, I couldn't prepare a response. Please contact Academy staff."
     sources = result.get("sources") or []
+    suppress_source_attachments = _is_handoff_response(result, answer)
 
     db.add(Message(
         conversation_id=conversation.id,
@@ -586,7 +624,12 @@ def _process_inbound(
     event_record.response_text = answer[:12000]
     db.commit()
 
-    return {"answer": answer, "sources": sources, "user_id": user.id}
+    return {
+        "answer": answer,
+        "sources": sources,
+        "user_id": user.id,
+        "suppress_source_attachments": suppress_source_attachments,
+    }
 
 
 def _process_slack_event_background(payload: dict[str, Any], event_id: str) -> None:
@@ -620,7 +663,7 @@ def _process_slack_event_background(payload: dict[str, Any], event_id: str) -> N
                 "slack",
                 channel_id,
                 response.get("answer") or "",
-                response.get("sources") or [],
+                [] if response.get("suppress_source_attachments") else (response.get("sources") or []),
                 user,
                 db,
                 str(thread_ts) if thread_ts else None,
@@ -700,7 +743,7 @@ async def telegram_webhook(
                 "telegram",
                 message["chat"]["id"],
                 response.get("answer") or "",
-                response.get("sources") or [],
+                [] if response.get("suppress_source_attachments") else (response.get("sources") or []),
                 user,
                 db,
             )
@@ -764,3 +807,4 @@ async def slack_events(
         background_tasks.add_task(_process_slack_event_background, payload, event_id)
 
     return {"ok": True}
+
