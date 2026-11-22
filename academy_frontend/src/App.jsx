@@ -11,10 +11,20 @@ const dateLabel = (v) =>
 const asArray = (v) => (Array.isArray(v) ? v : []);
 
 // Matches [Source 1], [Source 1, page 3] and the 【 】 variants.
-const pattern = /[\[【]Source\s+(\d+)(?:,\s*page\s+([^\]】]+))?[\]】]/gi;
+
+// Supports:
+// [Source 1]
+// [Source 1, page 3]
+// 【Source 1】
+// (See Sources 1, 3, 4)
+// (Sources 1, 3, 4)
+
+const pattern =
+  /\((?:See\s+)?Sources?\s+(\d+(?:\s*,\s*\d+)*)(?:,\s*page\s+([^)]+))?\)|[\[【]Source\s+(\d+)(?:,\s*page\s+([^\]】]+))?[\]】]/gi;
 
 function CitationText({ content, sources, onDownload, downloading }) {
   const text = content ?? '';
+
   const sourceMap = new Map(
     asArray(sources).map((source, index) => [
       String(source.source_id ?? index + 1),
@@ -25,6 +35,7 @@ function CitationText({ content, sources, onDownload, downloading }) {
   const parts = [];
   let last = 0;
   let match;
+  let key = 0;
 
   pattern.lastIndex = 0;
 
@@ -33,26 +44,44 @@ function CitationText({ content, sources, onDownload, downloading }) {
       parts.push(text.slice(last, match.index));
     }
 
-    const source = sourceMap.get(match[1]);
+    const numbers = match[1]
+      ? match[1].split(',').map((n) => n.trim())
+      : [match[3]];
 
-    if (source?.document_id) {
-      const isDownloading = downloading === source.document_id;
+    const isPlural = Boolean(match[1]);
+    const page = match[2] || match[4];
 
-      parts.push(
-        <button
-          key={`citation-${match.index}`}
-          type="button"
-          className="citation"
-          disabled={isDownloading}
-          onClick={() => onDownload(source)}
-          title={`Download ${source.document_title || 'source document'}`}
-        >
-          {isDownloading ? 'Downloading...' : match[0]}
-        </button>
-      );
-    } else {
-      parts.push(match[0]);
-    }
+    if (isPlural) parts.push('(See ');
+
+    numbers.forEach((number, index) => {
+      if (index > 0) parts.push(', ');
+
+      const source = sourceMap.get(number);
+
+      if (source?.document_id) {
+        const isDownloading =
+          String(downloading) === String(source.document_id);
+
+        parts.push(
+          <button
+            key={`citation-${key++}`}
+            type="button"
+            className="citation"
+            disabled={isDownloading}
+            onClick={() => onDownload(source)}
+            title={`Download ${source.document_title || 'source document'}`}
+          >
+            {isDownloading ? 'Downloading...' : `Source ${number}`}
+          </button>
+        );
+      } else {
+        parts.push(`Source ${number}`);
+      }
+    });
+
+    if (page) parts.push(`, page ${page}`);
+
+    if (isPlural) parts.push(')');
 
     last = pattern.lastIndex;
   }
@@ -63,6 +92,7 @@ function CitationText({ content, sources, onDownload, downloading }) {
 
   return <>{parts}</>;
 }
+
 
 function AuthScreen({ onLogin }) {
   const [step, setStep] = useState('email');
