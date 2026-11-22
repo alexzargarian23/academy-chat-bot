@@ -167,7 +167,7 @@ def reply_to_handoff(handoff_id: int, data: StaffReplyRequest, db: Session = Dep
 
     now = datetime.now(timezone.utc)
     message = Message(conversation_id=conversation.id, sender="staff", content=data.content.strip())
-    conversation.last_staff_message_at = now
+    conversation.last_response_at = now
     db.add(message)
     db.flush()
     row.conversation_context = list(row.conversation_context or []) + [{
@@ -180,6 +180,7 @@ def reply_to_handoff(handoff_id: int, data: StaffReplyRequest, db: Session = Dep
 
 @router.patch("/{handoff_id}/resolve")
 def resolve_handoff(handoff_id: int, data: ResolveHandoffRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Resolve the support ticket without injecting a generic message into the chat."""
     require_staff(current_user)
     row = db.query(Handoff).filter(Handoff.id == handoff_id).first()
     if not row:
@@ -187,27 +188,11 @@ def resolve_handoff(handoff_id: int, data: ResolveHandoffRequest, db: Session = 
     if row.status == "resolved":
         raise HTTPException(status_code=400, detail="Handoff is already resolved")
 
-    conversation = db.query(Conversation).filter(Conversation.id == row.conversation_id).first()
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    now = datetime.now(timezone.utc)
-    resolution_text = (
-        "Your request has been resolved. If you need further assistance, "
-        "please send us another message."
-    )
-    # This is a real conversation message, not an internal staff note.
-    db.add(Message(conversation_id=conversation.id, sender="staff", content=resolution_text))
-    conversation.last_staff_message_at = now
-
     row.status = "resolved"
     row.assigned_to_user_id = current_user.id
     if data.staff_notes is not None:
         row.staff_notes = data.staff_notes
-    row.resolved_at = now
-    row.conversation_context = list(row.conversation_context or []) + [{
-        "sender": "staff", "content": resolution_text, "created_at": now.isoformat()
-    }]
+    row.resolved_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(row)

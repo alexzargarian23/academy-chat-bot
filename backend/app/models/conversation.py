@@ -28,29 +28,28 @@ class Conversation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
-    # Timestamp of the most recent staff-authored message visible to the user.
-    last_staff_message_at: Mapped[datetime | None] = mapped_column(
+    # Timestamp of the most recent assistant or staff response.
+    last_response_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
-    # Updated whenever the owner opens the conversation's messages.
+    # Updated whenever the conversation owner opens the message thread.
     last_user_read_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
     @property
-    def has_unread_staff_message(self) -> bool:
-        if self.last_staff_message_at is None:
+    def has_unread_response(self) -> bool:
+        if self.last_response_at is None:
             return False
         if self.last_user_read_at is None:
             return True
-        staff_at = self.last_staff_message_at
+        response_at = self.last_response_at
         read_at = self.last_user_read_at
-        # PostgreSQL normally returns aware timestamps; normalize SQLite/test values too.
-        if staff_at.tzinfo is None and read_at.tzinfo is not None:
-            staff_at = staff_at.replace(tzinfo=timezone.utc)
-        if read_at.tzinfo is None and staff_at.tzinfo is not None:
+        if response_at.tzinfo is None and read_at.tzinfo is not None:
+            response_at = response_at.replace(tzinfo=timezone.utc)
+        if read_at.tzinfo is None and response_at.tzinfo is not None:
             read_at = read_at.replace(tzinfo=timezone.utc)
-        return staff_at > read_at
+        return response_at > read_at
 
     user: Mapped["User | None"] = relationship(back_populates="conversations")
     applicant_lead = relationship("ApplicantLead")

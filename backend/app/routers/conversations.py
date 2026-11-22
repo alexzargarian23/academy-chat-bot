@@ -118,7 +118,7 @@ def get_messages(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Opening the thread acknowledges all staff messages received up to now.
+    # Opening the thread acknowledges all assistant and staff responses received so far.
     conversation.last_user_read_at = datetime.now(timezone.utc)
     db.commit()
 
