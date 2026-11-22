@@ -179,5 +179,6 @@ export const handoffs = {
   detail: (id) => api(`/handoffs/${id}`),
   assign: (id, staff_user_id) => api(`/handoffs/${id}/assign`, { method: 'PATCH', body: JSON.stringify({ staff_user_id }) }),
   saveNotes: (id, staff_notes) => api(`/handoffs/${id}/notes`, { method: 'PATCH', body: JSON.stringify({ staff_notes }) }),
+  reply: (id, content) => api(`/handoffs/${id}/reply`, { method: 'POST', body: JSON.stringify({ content }) }),
   resolve: (id, staff_notes) => api(`/handoffs/${id}/resolve`, { method: 'PATCH', body: JSON.stringify({ staff_notes }) }),
 };

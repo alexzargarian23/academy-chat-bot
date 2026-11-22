@@ -751,7 +751,9 @@ function HumanHandoffsView() {
   const [filter, setFilter] = useState('all');
   const [selectedId, setSelectedId] = useState(null);
   const [notes, setNotes] = useState('');
+  const [replyDraft, setReplyDraft] = useState('');
   const [assignee, setAssignee] = useState('');
+  const [confirmResolve, setConfirmResolve] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -771,7 +773,8 @@ function HumanHandoffsView() {
   }, [filter]);
 
   useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => { setNotes(selected?.staff_notes || ''); setAssignee(selected?.assigned_to_user_id ? String(selected.assigned_to_user_id) : ''); }, [selected?.id, selected?.staff_notes, selected?.assigned_to_user_id]);
+  useEffect(() => { setNotes(selected?.staff_notes || ''); setAssignee(selected?.assigned_to_user_id ? String(selected.assigned_to_user_id) : ''); setReplyDraft(''); }, [selected?.id, selected?.staff_notes, selected?.assigned_to_user_id]);
+  useEffect(() => { if (!notice && !error) return; const timer = window.setTimeout(() => { setNotice(''); setError(''); }, 4200); return () => window.clearTimeout(timer); }, [notice, error]);
 
   async function perform(action, success) {
     if (!selected) return;
@@ -781,13 +784,29 @@ function HumanHandoffsView() {
     finally { setBusy(false); }
   }
 
+  async function sendStaffReply() {
+    const content = replyDraft.trim();
+    if (!selected || !content || busy) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await handoffs.reply(selected.id, content);
+      setReplyDraft('');
+      await refresh();
+      setNotice('Reply sent to the user.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) return <div className="email-loading"><RefreshCw className="spin" size={22}/>Loading human handoffs...</div>;
   return <div className="email-workspace">
     <div className="email-heading"><div><span className="eyebrow">ACADEMY SUPPORT WORKSPACE</span><h1>Human Handoffs</h1><p>Review conversations that need assistance from Academy staff.</p></div><button className="email-secondary-btn" onClick={refresh}><RefreshCw size={16}/>Refresh</button></div>
     <div className="handoff-stats">
       {['pending','assigned','resolved'].map((key) => <div className="handoff-stat" key={key}><strong>{stats[key] || 0}</strong><span>{key}</span></div>)}
     </div>
-    {error && <div className="email-alert error">{error}</div>}{notice && <div className="email-alert success">{notice}</div>}
+    {(error || notice) && <div className={`academy-toast ${error ? 'error' : 'success'}`} role="status">{error || notice}<button type="button" onClick={() => { setError(''); setNotice(''); }} aria-label="Dismiss notification"><X size={15}/></button></div>}
     <div className="email-filters">{[['all','All'],['pending','Pending'],['assigned','Assigned'],['resolved','Resolved']].map(([v,label])=><button key={v} className={filter===v?'active':''} onClick={()=>setFilter(v)}>{label}</button>)}</div>
     <div className="email-layout handoff-layout">
       <section className="email-list"><div className="email-list-heading"><strong><ClipboardList size={16}/>Requests</strong><span>{items.length}</span></div>
@@ -802,16 +821,18 @@ function HumanHandoffsView() {
           <div className="email-metadata"><p><strong>Email:</strong> {selected.requester_email || 'Not provided'}</p><p><strong>Role:</strong> {selected.requester_role || 'guest'}</p><p><strong>Channel:</strong> {selected.channel || 'website'}</p><p><strong>Trigger:</strong> {(selected.trigger_type || '').replaceAll('_',' ')}</p><p><strong>Created:</strong> {selected.created_at ? new Date(selected.created_at).toLocaleString() : 'Unknown'}</p><p><strong>Assigned to:</strong> {selected.assigned_to_name || 'Unassigned'}</p></div>
           <div className="email-original"><h3>AI summary</h3><div>{selected.ai_summary || selected.reason}</div></div>
           <div className="email-original"><h3>Suggested next action</h3><div>{selected.suggested_action || 'Review the conversation and follow up with the user.'}</div></div>
-          <div className="email-original"><h3>Conversation history</h3><div className="handoff-conversation">{asArray(selected.conversation_context).map((m,i)=><p key={i}><b>{m.sender === 'user' ? 'User' : 'Assistant'}:</b> {m.content}</p>)}</div></div>
+          <div className="email-original"><h3>Conversation history</h3><div className="handoff-conversation">{asArray(selected.conversation_context).map((m,i)=><p key={i}><b>{m.sender === 'user' ? (selected.requester_name || 'User') : m.sender === 'staff' ? 'Academy Support' : 'Academy Assistant'}:</b> {m.content}</p>)}</div></div>
+          <div className="email-reply academy-public-reply"><h3><Send size={17}/>Reply to user</h3><p className="academy-helper">Your message will appear in the user's original conversation as Academy Support.</p><textarea value={replyDraft} onChange={(e)=>setReplyDraft(e.target.value)} placeholder="Write a helpful response to the user..." disabled={busy}/><div className="email-actions"><button type="button" className="email-primary-btn" disabled={busy || !replyDraft.trim()} onClick={sendStaffReply}><Send size={15}/>{busy ? 'Sending...' : 'Send reply'}</button></div></div>
           <div className="email-reply"><h3><UserCheck size={17}/>Staff actions</h3>
             <label className="handoff-label">Assign to</label><select value={assignee} onChange={(e)=>setAssignee(e.target.value)}><option value="">Select staff member</option>{staff.map((u)=><option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>)}</select>
             <div className="email-actions"><button className="email-secondary-btn" disabled={busy || !assignee || selected.status==='resolved'} onClick={()=>perform(()=>handoffs.assign(selected.id, Number(assignee)),'Handoff assigned.')}>Assign</button></div>
             <label className="handoff-label">Internal staff notes</label><textarea value={notes} onChange={(e)=>setNotes(e.target.value)} placeholder="Add internal notes for the Academy team..." />
-            <div className="email-actions"><button className="email-secondary-btn" disabled={busy || !notes.trim() || selected.status==='resolved'} onClick={()=>perform(()=>handoffs.saveNotes(selected.id,notes.trim()),'Notes saved.')}>Save notes</button><button className="email-primary-btn" disabled={busy || selected.status==='resolved'} onClick={()=>window.confirm('Mark this handoff as resolved?') && perform(()=>handoffs.resolve(selected.id,notes.trim() || undefined),'Handoff resolved.')}> <Check size={15}/>Resolve</button></div>
+            <div className="email-actions"><button className="email-secondary-btn" disabled={busy || !notes.trim() || selected.status==='resolved'} onClick={()=>perform(()=>handoffs.saveNotes(selected.id,notes.trim()),'Notes saved.')}>Save notes</button><button type="button" className="email-primary-btn" disabled={busy || selected.status==='resolved'} onClick={()=>setConfirmResolve(true)}><Check size={15}/>Resolve</button></div>
           </div>
         </>}
       </section>
     </div>
+    {confirmResolve && selected && <div className="academy-modal-backdrop" role="presentation" onMouseDown={(e)=>{ if(e.target===e.currentTarget) setConfirmResolve(false); }}><section className="academy-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="resolve-title"><div className="academy-modal-icon"><Check size={20}/></div><h2 id="resolve-title">Resolve this request?</h2><p>This will mark the handoff as resolved. It will not send an automatic message to the user.</p><div className="academy-modal-actions"><button type="button" className="email-secondary-btn" onClick={()=>setConfirmResolve(false)}>Cancel</button><button type="button" className="email-primary-btn" disabled={busy} onClick={async()=>{ setConfirmResolve(false); await perform(()=>handoffs.resolve(selected.id,notes.trim() || undefined),'Handoff resolved.'); }}><Check size={15}/>Confirm resolve</button></div></section></div>}
   </div>;
 }
 
@@ -837,6 +858,10 @@ export default function App() {
   const end = useRef(null);
   const input = useRef(null);
   const openRequest = useRef(0); // guards against stale responses in open()
+  const activeRef = useRef(active);
+  const viewRef = useRef(view);
+  activeRef.current = active;
+  viewRef.current = view;
 
   // Restore session
   useEffect(() => {
@@ -883,7 +908,7 @@ export default function App() {
         setMessages(asArray(list));
         // The messages endpoint marks this conversation as read on the server.
         setItems((current) => current.map((item) =>
-          item.id === id ? { ...item, has_unread_staff_message: false } : item
+          item.id === id ? { ...item, has_unread_response: false } : item
         ));
       }
     } catch (e) {
@@ -985,6 +1010,14 @@ export default function App() {
           handoff_required: result.handoff_required,
         },
       ]);
+      // If the user is still viewing this same thread, acknowledge the AI reply.
+      // If they navigated away while it was generating, leave it unread.
+      if (viewRef.current === 'chat' && (activeRef.current === id || activeRef.current === null)) {
+        try {
+          await chats.messages(id);
+          setItems((current) => current.map((item) => item.id === id ? { ...item, has_unread_response: false } : item));
+        } catch { /* the normal sidebar refresh below will retry */ }
+      }
     } catch (err) {
       setMessages((m) => m.filter((x) => x.id !== userMsg.id));
       setDraft(q);
@@ -1136,8 +1169,8 @@ export default function App() {
                       <b>{c.title || 'New conversation'}</b>
                       <small>{dateLabel(c.created_at)}</small>
                     </span>
-                    {c.has_unread_staff_message && active !== c.id && (
-                      <span className="unread-dot" title="New message from Academy Support" aria-label="Unread staff message" />
+                    {c.has_unread_response && !(view === 'chat' && active === c.id) && (
+                      <span className="unread-dot" title="New message from Academy Support" aria-label="Unread new message" />
                     )}
                     <button
                       className="delete-chat"
