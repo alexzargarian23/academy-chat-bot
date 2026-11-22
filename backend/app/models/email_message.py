@@ -26,3 +26,10 @@ class AcademyEmail(Base):
     staff_approved: Mapped[bool] = mapped_column(Boolean, default=False)
 
     approver = relationship("User", foreign_keys=[approved_by])
+    gmail_thread_id: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, index=True
+    )
+
+    rfc_message_id: Mapped[str | None] = mapped_column(
+        String(1000), nullable=True
+    )

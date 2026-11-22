@@ -73,3 +73,5 @@ websockets==17.4
 google-genai
 google-api-python-client
 google-auth
+pwdlib[argon2]==0.4.2
+google-auth-oauthlib>=1.2.0,<2.0.0

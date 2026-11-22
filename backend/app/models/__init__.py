@@ -15,10 +15,12 @@ from app.models.appointment import Appointment, AppointmentSlot
 from app.models.email_message import AcademyEmail
 from app.models.channel_identity import ChannelIdentity
 from app.models.channel_event import ChannelEvent
+from app.models.gmail_token import GmailToken
+from app.models.gmail_oauth_state import GmailOAuthState
 
 __all__ = [
     "User", "Conversation", "Message", "Document", "DocumentChunk",
     "Program", "ApplicantLead", "Handoff", "StudentProfile", "ClassSchedule",
     "StudentInvoice", "StudentPayment", "AttendanceRecord", "StudentGrade", "StudentRequest",
-    "Appointment", "AppointmentSlot", "AcademyEmail", "ChannelIdentity", "ChannelEvent",
+    "Appointment", "AppointmentSlot", "AcademyEmail", "ChannelIdentity", "ChannelEvent", "GmailToken", "GmailOAuthState",
 ]

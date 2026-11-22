@@ -1,129 +1,265 @@
-import email
-import imaplib
+
+import base64
 import logging
 import os
-import smtplib
 from datetime import datetime, timezone
-from email.header import decode_header
 from email.message import EmailMessage
 from email.utils import parseaddr
 
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
 
 from app.models.email_message import AcademyEmail
+from app.models.gmail_token import GmailToken
+from app.services.gmail_oauth_service import (
+    GMAIL_SCOPES,
+    _encryption,
+    _required_env,
+)
 from app.services.rag_service import answer_question
 
 logger = logging.getLogger(__name__)
 
 
-def _cfg(name: str, default: str | None = None) -> str | None:
-    return os.getenv(name, default)
+def _get_credentials(db: Session):
+    from google.oauth2.credentials import Credentials
+
+    account = _required_env("GMAIL_ACCOUNT").lower()
+
+    token = (
+        db.query(GmailToken)
+        .filter(GmailToken.account_email == account)
+        .first()
+    )
+
+    if not token:
+        raise RuntimeError("Gmail is not connected. Connect Gmail first.")
+
+    decrypted = _encryption().decrypt(
+        token.encrypted_credentials.encode("utf-8")
+    ).decode("utf-8")
+
+    credentials = Credentials.from_authorized_user_info(
+        __import__("json").loads(decrypted),
+        scopes=GMAIL_SCOPES,
+    )
+
+    if credentials.expired:
+        if not credentials.refresh_token:
+            raise RuntimeError("Gmail refresh token is missing.")
+
+        credentials.refresh(Request())
+
+        token.encrypted_credentials = _encryption().encrypt(
+            credentials.to_json().encode("utf-8")
+        ).decode("utf-8")
+
+        db.commit()
+
+    return credentials
 
 
-def _decode(value: str | None) -> str:
+def _gmail_service(db: Session):
+    credentials = _get_credentials(db)
+
+    return build(
+        "gmail",
+        "v1",
+        credentials=credentials,
+        cache_discovery=False,
+    )
+
+
+def _decode_header_value(value: str | None) -> str:
     if not value:
         return ""
+
+    from email.header import decode_header
+
     parts = []
+
     for chunk, encoding in decode_header(value):
-        parts.append(chunk.decode(encoding or "utf-8", errors="replace") if isinstance(chunk, bytes) else chunk)
+        if isinstance(chunk, bytes):
+            parts.append(
+                chunk.decode(encoding or "utf-8", errors="replace")
+            )
+        else:
+            parts.append(chunk)
+
     return "".join(parts)
 
 
-def _plain_body(message: email.message.Message) -> str:
-    if message.is_multipart():
-        for part in message.walk():
-            if part.get_content_type() == "text/plain" and part.get_content_disposition() != "attachment":
-                payload = part.get_payload(decode=True)
-                if payload:
-                    return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-    payload = message.get_payload(decode=True)
-    return payload.decode(message.get_content_charset() or "utf-8", errors="replace") if payload else str(message.get_payload())
+def _headers(message: dict) -> dict:
+    result = {}
+
+    for header in message.get("payload", {}).get("headers", []):
+        result[header["name"].lower()] = header["value"]
+
+    return result
+
+
+def _extract_body(payload: dict) -> str:
+    mime_type = payload.get("mimeType", "")
+    data = payload.get("body", {}).get("data")
+
+    if mime_type == "text/plain" and data:
+        decoded = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+        return decoded.decode("utf-8", errors="replace")
+
+    for part in payload.get("parts", []):
+        result = _extract_body(part)
+
+        if result:
+            return result
+
+    return ""
 
 
 def sync_inbox(db: Session, limit: int = 30) -> dict:
-    host = _cfg("ACADEMY_IMAP_HOST")
-    username = _cfg("ACADEMY_EMAIL_USER")
-    password = _cfg("ACADEMY_EMAIL_PASSWORD")
-    if not all((host, username, password)):
-        raise RuntimeError("Academy IMAP settings are incomplete")
-    assert host and username and password
-    client = imaplib.IMAP4_SSL(host, int(_cfg("ACADEMY_IMAP_PORT", "993") or "993"))
-    try:
-        client.login(username, password)
-        client.select(_cfg("ACADEMY_IMAP_MAILBOX", "INBOX") or "INBOX", readonly=True)
-        result, data = client.search(None, "ALL")
-        if result != "OK":
-            raise RuntimeError("Could not search Academy inbox")
-        ids = (data[0].split() if data and data[0] else [])[-limit:]
-        imported = 0
-        for uid in ids:
-            result, parts = client.fetch(uid, "(RFC822)")
-            if result != "OK":
-                continue
-            raw = next((part[1] for part in parts if isinstance(part, tuple)), None)
-            if not raw:
-                continue
-            message = email.message_from_bytes(raw)
-            message_id = (message.get("Message-ID") or f"imap-{uid.decode(errors='ignore')}").strip()
-            if db.query(AcademyEmail).filter(AcademyEmail.message_id == message_id).first():
-                continue
-            received_at = email.utils.parsedate_to_datetime(message.get("Date") or "") if message.get("Date") else datetime.now(timezone.utc)
-            if received_at.tzinfo is None:
-                received_at = received_at.replace(tzinfo=timezone.utc)
-            db.add(AcademyEmail(
-                message_id=message_id,
-                sender=parseaddr(message.get("From", ""))[1],
-                recipient=parseaddr(message.get("To") or username)[1] or username,
-                subject=_decode(message.get("Subject")),
-                body=_plain_body(message)[:50000],
-                received_at=received_at,
-                status="received",
-            ))
-            imported += 1
-        db.commit()
-        return {"imported": imported}
-    finally:
-        try:
-            client.logout()
-        except Exception:
-            logger.debug("Could not close IMAP connection", exc_info=True)
+    gmail = _gmail_service(db)
+
+    account = _required_env("GMAIL_ACCOUNT")
+
+    response = (
+        gmail.users()
+        .messages()
+        .list(
+            userId="me",
+            labelIds=["INBOX"],
+            maxResults=min(max(limit, 1), 100),
+        )
+        .execute()
+    )
+
+    messages = response.get("messages", [])
+    imported = 0
+    skipped = 0
+
+    for item in messages:
+        gmail_id = item["id"]
+        stable_id = f"gmail:{gmail_id}"
+
+        existing = (
+            db.query(AcademyEmail)
+            .filter(AcademyEmail.message_id == stable_id)
+            .first()
+        )
+
+        if existing:
+            skipped += 1
+            continue
+
+        full_message = (
+            gmail.users()
+            .messages()
+            .get(
+                userId="me",
+                id=gmail_id,
+                format="full",
+            )
+            .execute()
+        )
+
+        headers = _headers(full_message)
+
+        sender = parseaddr(headers.get("from", ""))[1]
+        recipient = parseaddr(headers.get("to", account))[1] or account
+
+        internal_date = full_message.get("internalDate")
+
+        if internal_date:
+            received_at = datetime.fromtimestamp(
+                int(internal_date) / 1000,
+                tz=timezone.utc,
+            )
+        else:
+            received_at = datetime.now(timezone.utc)
+
+        body = _extract_body(full_message.get("payload", {}))
+
+        record = AcademyEmail(
+            message_id=stable_id,
+            gmail_thread_id=full_message.get("threadId"),
+            rfc_message_id=headers.get("message-id"),
+            sender=sender,
+            recipient=recipient,
+            subject=_decode_header_value(headers.get("subject")),
+            body=body[:50000],
+            received_at=received_at,
+            status="received",
+        )
+
+        db.add(record)
+        imported += 1
+
+    db.commit()
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "checked": len(messages),
+    }
 
 
 def create_reply_draft(db: Session, record: AcademyEmail) -> AcademyEmail:
     prompt = (
-        "Draft an email reply to this message. Answer using only the Academy knowledge base. "
-        "If the knowledge base does not support an answer, say staff must confirm it. Do not invent facts.\n"
-        f"Subject: {record.subject}\nEmail: {record.body}"
+        "Draft an email reply to this message. Answer using only the Academy "
+        "knowledge base. If the knowledge base does not support an answer, "
+        "say staff must confirm it. Do not invent facts.\n"
+        f"Subject: {record.subject}\n"
+        f"Email: {record.body}"
     )
+
     result = answer_question(prompt, db, "staff")
+
     record.reply_draft = result["answer"]
     record.status = "drafted"
+    record.staff_approved = False
+    record.approved_by = None
+
     db.commit()
     db.refresh(record)
+
     return record
 
 
-def send_approved_reply(record: AcademyEmail) -> None:
-    host = _cfg("ACADEMY_SMTP_HOST")
-    username = _cfg("ACADEMY_EMAIL_USER")
-    password = _cfg("ACADEMY_EMAIL_PASSWORD")
-    if not all((host, username, password)):
-        raise RuntimeError("Academy SMTP settings are incomplete")
-    assert host and username and password
-    if record.status != "approved" or not record.staff_approved or not record.reply_draft:
-        raise RuntimeError("Only staff-approved drafts can be sent")
+def send_approved_reply(db: Session, record: AcademyEmail) -> None:
+    if (
+        record.status != "approved"
+        or not record.staff_approved
+        or not record.reply_draft
+    ):
+        raise RuntimeError("Only admin-approved drafts can be sent.")
+
+    if not record.gmail_thread_id:
+        raise RuntimeError("Gmail thread ID is missing for this email.")
+
+    gmail = _gmail_service(db)
+
     message = EmailMessage()
-    message["From"] = _cfg("ACADEMY_EMAIL_FROM", username)
     message["To"] = record.sender
-    message["Subject"] = "Re: " + record.subject
+    message["From"] = _required_env("GMAIL_ACCOUNT")
+    message["Subject"] = (
+        record.subject
+        if record.subject.lower().startswith("re:")
+        else f"Re: {record.subject}"
+    )
+
+    if record.rfc_message_id:
+        message["In-Reply-To"] = record.rfc_message_id
+        message["References"] = record.rfc_message_id
+
     message.set_content(record.reply_draft)
-    port = int(_cfg("ACADEMY_SMTP_PORT", "465") or "465")
-    if (_cfg("ACADEMY_SMTP_USE_SSL", "true") or "true").lower() == "true":
-        with smtplib.SMTP_SSL(host, port, timeout=30) as server:
-            server.login(username, password)
-            server.send_message(message)
-    else:
-        with smtplib.SMTP(host, port, timeout=30) as server:
-            server.starttls()
-            server.login(username, password)
-            server.send_message(message)
+
+    raw_message = base64.urlsafe_b64encode(
+        message.as_bytes()
+    ).decode("utf-8")
+
+    gmail.users().messages().send(
+        userId="me",
+        body={
+            "raw": raw_message,
+            "threadId": record.gmail_thread_id,
+        },
+    ).execute()

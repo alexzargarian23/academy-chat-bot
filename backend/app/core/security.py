@@ -1,13 +1,24 @@
-from datetime import datetime, timedelta, timezone
 
+import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from dotenv import load_dotenv
 from jose import jwt
 from pwdlib import PasswordHash
 
-password_hash = PasswordHash.recommended()
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(ENV_FILE)
 
-SECRET_KEY = "dev-secret-key-change-this-later"
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY is not configured")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+password_hash = PasswordHash.recommended()
 
 
 def hash_password(password: str) -> str:
