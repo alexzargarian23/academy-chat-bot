@@ -802,14 +802,51 @@ function HumanHandoffsView() {
 
   const refresh = useCallback(async () => {
     setError('');
-    try {
-      const [list, counts, team] = await Promise.all([
-        handoffs.list(filter), handoffs.stats(), handoffs.staff(),
-      ]);
-      setItems(asArray(list)); setStats(counts || {}); setStaff(asArray(team));
-      setSelectedId((current) => current && list.some((x) => x.id === current) ? current : (list[0]?.id ?? null));
-    } catch (err) { setError(err.message); }
-    finally { setLoading(false); }
+
+    // Load the handoff list independently. A failure in the stats or staff
+    // endpoints must not prevent valid handoff requests from appearing.
+    const [listResult, statsResult, staffResult] = await Promise.allSettled([
+      handoffs.list(filter),
+      handoffs.stats(),
+      handoffs.staff(),
+    ]);
+
+    if (listResult.status === 'fulfilled') {
+      const list = asArray(listResult.value);
+      setItems(list);
+      setSelectedId((current) =>
+        current && list.some((item) => String(item.id) === String(current))
+          ? current
+          : (list[0]?.id ?? null)
+      );
+    } else {
+      const reason = listResult.reason;
+      setError(
+        `Could not load handoff requests: ${
+          reason?.message || 'Unknown error'
+        }`
+      );
+    }
+
+    if (statsResult.status === 'fulfilled') {
+      setStats(statsResult.value || {});
+    }
+
+    if (staffResult.status === 'fulfilled') {
+      setStaff(asArray(staffResult.value));
+    }
+
+    if (
+      statsResult.status === 'rejected' ||
+      staffResult.status === 'rejected'
+    ) {
+      setError((current) =>
+        current ||
+        'Handoff requests loaded, but some dashboard information could not be loaded.'
+      );
+    }
+
+    setLoading(false);
   }, [filter]);
 
   useEffect(() => { refresh(); }, [refresh]);
