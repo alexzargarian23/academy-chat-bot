@@ -576,21 +576,13 @@ body,
   .email-actions > button { flex: 1 1 100%; }
 }
 
-/* Fix: ChatGPT-style unread indicator */
-.history-item {
-    position: relative !important;
-}
 
-.history-item .unread-dot {
-    position: absolute !important;
 
-    /* Position next to the conversation title */
-    right: 42px !important;
-    top: 50% !important;
-    transform: translateY(-50%) !important;
-
-    /* Force a perfect circle */
+/* ChatGPT-style unread indicator */
+.history-item > span.unread-dot {
     display: block !important;
+    flex: 0 0 8px !important;
+
     width: 8px !important;
     height: 8px !important;
     min-width: 8px !important;
@@ -598,16 +590,13 @@ body,
     min-height: 8px !important;
     max-height: 8px !important;
 
-    flex: none !important;
-    flex-grow: 0 !important;
-    flex-shrink: 0 !important;
-
+    margin: 4px 8px 0 auto !important;
     padding: 0 !important;
-    margin: 0 !important;
+
     border: none !important;
     border-radius: 50% !important;
-
     background: #2563eb !important;
-    box-shadow: none !important;
+
+    align-self: flex-start !important;
     aspect-ratio: 1 / 1 !important;
 }
