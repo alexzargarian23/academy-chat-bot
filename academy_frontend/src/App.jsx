@@ -106,6 +106,232 @@ function CitationText({ content, sources, onDownload, downloading }) {
 }
 
 
+// Render the assistant's Markdown without requiring an additional package.
+// This supports the formatting commonly returned by the RAG assistant,
+// including tables, headings, lists, bold text, inline code and source links.
+function InlineMarkdown({ text, sources, onDownload, downloading }) {
+  const value = String(text ?? '');
+  const tokenPattern =
+    /(\*\*[\s\S]+?\*\*|__[\s\S]+?__|`[^`]+`|(?<!\*)\*[^*\n]+\*|<br\s*\/?>|<\/?br\s*\/?>)/gi;
+  const output = [];
+  let last = 0;
+  let match;
+  let index = 0;
+
+  while ((match = tokenPattern.exec(value)) !== null) {
+    if (match.index > last) {
+      output.push(
+        <CitationText
+          key={`plain-${index++}`}
+          content={value.slice(last, match.index)}
+          sources={sources}
+          onDownload={onDownload}
+          downloading={downloading}
+        />
+      );
+    }
+
+    const token = match[0];
+    if (/^<br/i.test(token)) {
+      output.push(<br key={`br-${index++}`} />);
+    } else if (token.startsWith('**') || token.startsWith('__')) {
+      output.push(
+        <strong key={`bold-${index++}`}>
+          <InlineMarkdown
+            text={token.slice(2, -2)}
+            sources={sources}
+            onDownload={onDownload}
+            downloading={downloading}
+          />
+        </strong>
+      );
+    } else if (token.startsWith('`')) {
+      output.push(<code key={`code-${index++}`}>{token.slice(1, -1)}</code>);
+    } else {
+      output.push(
+        <em key={`italic-${index++}`}>
+          <InlineMarkdown
+            text={token.slice(1, -1)}
+            sources={sources}
+            onDownload={onDownload}
+            downloading={downloading}
+          />
+        </em>
+      );
+    }
+    last = tokenPattern.lastIndex;
+  }
+
+  if (last < value.length || output.length === 0) {
+    output.push(
+      <CitationText
+        key={`plain-${index++}`}
+        content={value.slice(last)}
+        sources={sources}
+        onDownload={onDownload}
+        downloading={downloading}
+      />
+    );
+  }
+
+  return <>{output}</>;
+}
+
+function splitMarkdownTableRow(line) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(line) {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function MarkdownMessage({ content, sources, onDownload, downloading }) {
+  const lines = String(content ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let i = 0;
+  let key = 0;
+
+  const inline = (value) => (
+    <InlineMarkdown
+      text={value}
+      sources={sources}
+      onDownload={onDownload}
+      downloading={downloading}
+    />
+  );
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (!line.trim()) {
+      i += 1;
+      continue;
+    }
+
+    // Markdown table: header row, separator row, then zero or more body rows.
+    if (
+      line.includes('|') &&
+      i + 1 < lines.length &&
+      isMarkdownTableSeparator(lines[i + 1])
+    ) {
+      const headers = splitMarkdownTableRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+        rows.push(splitMarkdownTableRow(lines[i]));
+        i += 1;
+      }
+
+      blocks.push(
+        <div
+          className="markdown-table-wrap"
+          key={`table-${key++}`}
+          style={{ width: '100%', overflowX: 'auto', margin: '12px 0' }}
+        >
+          <table
+            className="markdown-table"
+            style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.94em' }}
+          >
+            <thead>
+              <tr>
+                {headers.map((cell, cellIndex) => (
+                  <th key={cellIndex} style={{ textAlign: 'left', padding: '9px 10px', borderBottom: '2px solid #d9d9e5', background: '#eeeeF6' }}>{inline(cell)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {headers.map((_, cellIndex) => (
+                    <td key={cellIndex} style={{ verticalAlign: 'top', textAlign: 'left', padding: '9px 10px', borderBottom: '1px solid #e4e4ec' }}>{inline(row[cellIndex] ?? '')}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const HeadingTag = `h${level + 2}`;
+      blocks.push(<HeadingTag key={`heading-${key++}`}>{inline(heading[2])}</HeadingTag>);
+      i += 1;
+      continue;
+    }
+
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*[-*]\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <ul key={`ul-${key++}`}>
+          {items.map((item, itemIndex) => <li key={itemIndex}>{inline(item)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+[.)]\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <ol key={`ol-${key++}`}>
+          {items.map((item, itemIndex) => <li key={itemIndex}>{inline(item)}</li>)}
+        </ol>
+      );
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      const quote = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*>\s?/, ''));
+        i += 1;
+      }
+      blocks.push(<blockquote key={`quote-${key++}`}>{inline(quote.join(' '))}</blockquote>);
+      continue;
+    }
+
+    // Keep ordinary paragraph line breaks, but stop before the next block.
+    const paragraph = [line];
+    i += 1;
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !/^(#{1,3})\s+/.test(lines[i]) &&
+      !/^\s*[-*]\s+/.test(lines[i]) &&
+      !/^\s*\d+[.)]\s+/.test(lines[i]) &&
+      !/^\s*>\s?/.test(lines[i]) &&
+      !(lines[i].includes('|') && i + 1 < lines.length && isMarkdownTableSeparator(lines[i + 1]))
+    ) {
+      paragraph.push(lines[i]);
+      i += 1;
+    }
+    blocks.push(
+      <p key={`p-${key++}`}>
+        {paragraph.map((part, partIndex) => (
+          <React.Fragment key={partIndex}>
+            {partIndex > 0 && <br />}
+            {inline(part)}
+          </React.Fragment>
+        ))}
+      </p>
+    );
+  }
+
+  return <div className="markdown-content">{blocks}</div>;
+}
+
+
 function AuthScreen({ onLogin }) {
   const [step, setStep] = useState('email');
   const [name, setName] = useState('');
@@ -1483,7 +1709,7 @@ export default function App() {
                       </div>
                       <div className="bubble">
                         {m.sender === 'assistant' ? (
-                          <CitationText
+                          <MarkdownMessage
                             content={m.content}
                             sources={m.sources}
                             onDownload={downloadCitation}
