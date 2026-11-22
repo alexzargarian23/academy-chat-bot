@@ -20,6 +20,11 @@ class GmailOAuthState(Base):
         default=lambda: secrets.token_urlsafe(32),
     )
 
+    code_verifier: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
@@ -28,7 +33,8 @@ class GmailOAuthState(Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc) + timedelta(minutes=10),
+        default=lambda: datetime.now(timezone.utc)
+        + timedelta(minutes=10),
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -1,6 +1,7 @@
 
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,7 +26,10 @@ from app.services.gmail_oauth_service import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/email-assistant", tags=["Email assistant"])
+router = APIRouter(
+    prefix="/email-assistant",
+    tags=["Email assistant"],
+)
 
 
 class DraftUpdate(BaseModel):
@@ -49,7 +53,7 @@ def _frontend_redirect(status: str) -> RedirectResponse:
 
 
 # --------------------------------------------------
-# GMAIL OAUTH
+# GMAIL OAUTH CONNECTION
 # --------------------------------------------------
 
 @router.get("/connect")
@@ -58,13 +62,24 @@ def connect_gmail(
     user: User = Depends(require_roles("admin")),
 ):
     try:
-        oauth_state = GmailOAuthState(user_id=user.id)
+        # Generate a unique PKCE verifier for this OAuth attempt.
+        code_verifier = secrets.token_urlsafe(64)
+
+        # Store both the OAuth state and its PKCE verifier.
+        oauth_state = GmailOAuthState(
+            user_id=user.id,
+            code_verifier=code_verifier,
+        )
 
         db.add(oauth_state)
         db.commit()
         db.refresh(oauth_state)
 
-        authorization_url = get_authorization_url(oauth_state.state)
+        # Generate Google's authorization URL using the same verifier.
+        authorization_url = get_authorization_url(
+            oauth_state.state,
+            code_verifier,
+        )
 
         return {
             "authorization_url": authorization_url,
@@ -73,6 +88,7 @@ def connect_gmail(
 
     except Exception as exc:
         db.rollback()
+
         logger.exception("Could not start Gmail OAuth")
 
         raise HTTPException(
@@ -81,6 +97,10 @@ def connect_gmail(
         ) from exc
 
 
+# --------------------------------------------------
+# GOOGLE OAUTH CALLBACK
+# --------------------------------------------------
+
 @router.get("/oauth/callback")
 def gmail_oauth_callback(
     code: str | None = None,
@@ -88,15 +108,20 @@ def gmail_oauth_callback(
     error: str | None = None,
     db: Session = Depends(get_db),
 ):
-    # User cancelled or denied Google authorization.
+    # Handle Google authorization denial.
     if error:
-        logger.warning("Google Gmail authorization was denied or cancelled.")
+        logger.warning(
+            "Google Gmail authorization was denied or cancelled."
+        )
         return _frontend_redirect("error")
 
     if not code or not state:
-        logger.warning("Gmail OAuth callback missing code or state.")
+        logger.warning(
+            "Gmail OAuth callback missing code or state."
+        )
         return _frontend_redirect("error")
 
+    # Find the original OAuth state.
     oauth_state = (
         db.query(GmailOAuthState)
         .filter(GmailOAuthState.state == state)
@@ -104,9 +129,12 @@ def gmail_oauth_callback(
     )
 
     if not oauth_state:
-        logger.warning("Invalid or already-used Gmail OAuth state.")
+        logger.warning(
+            "Invalid or already-used Gmail OAuth state."
+        )
         return _frontend_redirect("error")
 
+    # Validate expiration.
     expires_at = oauth_state.expires_at
 
     if expires_at.tzinfo is None:
@@ -117,21 +145,44 @@ def gmail_oauth_callback(
         db.commit()
 
         logger.warning("Gmail OAuth state expired.")
+
         return _frontend_redirect("error")
 
-    # Consume the state before exchanging the authorization code.
+    # Retrieve the ORIGINAL PKCE verifier before deleting the state.
+    code_verifier = oauth_state.code_verifier
+
+    if not code_verifier:
+        db.delete(oauth_state)
+        db.commit()
+
+        logger.error(
+            "Gmail OAuth state does not contain a PKCE verifier."
+        )
+
+        return _frontend_redirect("error")
+
+    # Consume the OAuth state to prevent reuse.
     db.delete(oauth_state)
     db.commit()
 
     try:
-        connected_email = complete_oauth(code, db)
+        # Exchange Google's authorization code using the original verifier.
+        connected_email = complete_oauth(
+            code=code,
+            db=db,
+            code_verifier=code_verifier,
+        )
 
-        logger.info("Gmail successfully connected: %s", connected_email)
+        logger.info(
+            "Gmail successfully connected: %s",
+            connected_email,
+        )
 
         return _frontend_redirect("connected")
 
     except Exception:
         db.rollback()
+
         logger.exception("Gmail OAuth callback failed")
 
         return _frontend_redirect("error")
@@ -165,7 +216,7 @@ def gmail_connection(
 
 
 # --------------------------------------------------
-# EMAIL MANAGEMENT
+# SYNCHRONIZE GMAIL INBOX
 # --------------------------------------------------
 
 @router.post("/sync")
@@ -180,6 +231,7 @@ def sync(
 
     except Exception as exc:
         db.rollback()
+
         logger.exception("Email synchronization failed")
 
         raise HTTPException(
@@ -187,6 +239,10 @@ def sync(
             detail="Could not synchronize inbox.",
         ) from exc
 
+
+# --------------------------------------------------
+# LIST EMAIL MESSAGES
+# --------------------------------------------------
 
 @router.get("/messages")
 def list_messages(
@@ -199,7 +255,9 @@ def list_messages(
     query = db.query(AcademyEmail)
 
     if status_filter:
-        query = query.filter(AcademyEmail.status == status_filter)
+        query = query.filter(
+            AcademyEmail.status == status_filter
+        )
 
     rows = (
         query
@@ -224,20 +282,28 @@ def list_messages(
     ]
 
 
-def _get_email(email_id: int, db: Session) -> AcademyEmail:
+# --------------------------------------------------
+# GET EMAIL BY ID
+# --------------------------------------------------
+
+def _get_email(
+    email_id: int,
+    db: Session,
+) -> AcademyEmail:
+
     row = db.get(AcademyEmail, email_id)
 
     if not row:
         raise HTTPException(
             status_code=404,
-            detail="Email not found",
+            detail="Email not found.",
         )
 
     return row
 
 
 # --------------------------------------------------
-# GENERATE REPLY DRAFT
+# GENERATE AI REPLY DRAFT
 # --------------------------------------------------
 
 @router.post("/messages/{email_id}/draft")
@@ -261,6 +327,7 @@ def draft(
 
     except Exception as exc:
         db.rollback()
+
         logger.exception("Reply draft generation failed")
 
         raise HTTPException(
@@ -287,7 +354,7 @@ def edit_draft(
     if row.status == "sent":
         raise HTTPException(
             status_code=409,
-            detail="Email has already been sent",
+            detail="Email has already been sent.",
         )
 
     row.reply_draft = data.reply_draft
@@ -318,13 +385,13 @@ def approve(
     if not row.reply_draft:
         raise HTTPException(
             status_code=404,
-            detail="Reply draft not found",
+            detail="Reply draft not found.",
         )
 
     if row.status == "sent":
         raise HTTPException(
             status_code=409,
-            detail="Email has already been sent",
+            detail="Email has already been sent.",
         )
 
     row.status = "approved"
@@ -354,6 +421,13 @@ def send(
 
     row = _get_email(email_id, db)
 
+    # Only approved replies may be sent.
+    if row.status != "approved" or not row.staff_approved:
+        raise HTTPException(
+            status_code=409,
+            detail="Reply must be approved before sending.",
+        )
+
     try:
         send_approved_reply(db, row)
 
@@ -370,6 +444,7 @@ def send(
 
     except Exception as exc:
         db.rollback()
+
         logger.exception("Email sending failed")
 
         raise HTTPException(

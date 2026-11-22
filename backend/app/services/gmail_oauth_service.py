@@ -40,33 +40,66 @@ def _encryption() -> Fernet:
     try:
         return Fernet(key.encode("utf-8"))
     except Exception as exc:
-        raise RuntimeError("GMAIL_TOKEN_ENCRYPTION_KEY is invalid") from exc
+        raise RuntimeError(
+            "GMAIL_TOKEN_ENCRYPTION_KEY is invalid"
+        ) from exc
 
 
-def create_oauth_flow(state: str | None = None) -> Flow:
+def create_oauth_flow(
+    state: str | None = None,
+    code_verifier: str | None = None,
+) -> Flow:
     flow = Flow.from_client_config(
         _client_config(),
         scopes=GMAIL_SCOPES,
         state=state,
     )
+
     flow.redirect_uri = _required_env("GMAIL_REDIRECT_URI")
+
+    if code_verifier:
+        flow.code_verifier = code_verifier
+
     return flow
 
 
-def get_authorization_url(state: str) -> str:
-    flow = create_oauth_flow(state=state)
+def get_authorization_url(
+    state: str,
+    code_verifier: str,
+) -> str:
+    flow = create_oauth_flow(
+        state=state,
+        code_verifier=code_verifier,
+    )
 
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
+
     return authorization_url
 
 
-def complete_oauth(code: str, db: Session) -> str:
-    flow = create_oauth_flow()
-    flow.fetch_token(code=code)
+def complete_oauth(
+    code: str,
+    db: Session,
+    code_verifier: str,
+) -> str:
+    if not code_verifier:
+        raise RuntimeError(
+            "OAuth code verifier is missing. Please connect Gmail again."
+        )
+
+    flow = create_oauth_flow(
+        code_verifier=code_verifier,
+    )
+
+    # Supply the original PKCE verifier when exchanging the code.
+    flow.fetch_token(
+        code=code,
+        code_verifier=code_verifier,
+    )
 
     credentials = flow.credentials
 
@@ -130,7 +163,9 @@ def load_credentials(db: Session):
     )
 
     if not token_record:
-        raise RuntimeError("Gmail is not connected yet. Connect Gmail first.")
+        raise RuntimeError(
+            "Gmail is not connected yet. Connect Gmail first."
+        )
 
     decrypted = _encryption().decrypt(
         token_record.encrypted_credentials.encode("utf-8")
