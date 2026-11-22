@@ -967,6 +967,11 @@ export default function App() {
     // Always return to chat when a conversation is selected from the sidebar.
     setView('chat');
     const req = ++openRequest.current;
+    try {
+      window.localStorage.setItem('academy_active_conversation', String(id));
+    } catch {
+      // Continue normally if browser storage is unavailable.
+    }
     setActive(id);
     setLoading(true);
     setError('');
@@ -1015,9 +1020,9 @@ export default function App() {
           // Fall back to the most recent conversation if storage is unavailable.
         }
 
-        const savedConversation = list.find(
-          (conversation) => Number(conversation.id) === savedId
-        );
+        const savedConversation = Number.isFinite(savedId)
+          ? list.find((conversation) => Number(conversation.id) === savedId)
+          : null;
         const conversationToOpen = savedConversation || list[0];
 
         await open(conversationToOpen.id);
@@ -1063,6 +1068,11 @@ export default function App() {
     setView('chat');
     openRequest.current++; // ignore any in-flight open()
     setLoading(false);
+    try {
+      window.localStorage.removeItem('academy_active_conversation');
+    } catch {
+      // Ignore unavailable browser storage.
+    }
     setActive(null);
     setMessages([]);
     setDraft('');
@@ -1093,6 +1103,11 @@ export default function App() {
         const c = await chats.create();
         id = c.id;
         openRequest.current++; // a new chat has nothing to load
+        try {
+          window.localStorage.setItem('academy_active_conversation', String(id));
+        } catch {
+          // Continue normally if browser storage is unavailable.
+        }
         setActive(id);
         setItems((x) => [c, ...x]);
       }
@@ -1167,7 +1182,7 @@ export default function App() {
       setItems(remaining);
       setDeleteTarget(null);
 
-      if (active === id) {
+      if (Number(active) === Number(id)) {
         if (remaining[0]) await open(remaining[0].id);
         else newChat();
       }
