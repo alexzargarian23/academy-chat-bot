@@ -1,4 +1,3 @@
-
 import logging
 from datetime import datetime, timezone
 
@@ -303,16 +302,11 @@ def reply_to_handoff(
 
     if conversation.channel in {"telegram", "slack"}:
         try:
-            # Local import avoids a module-level circular import.
-            from app.routers.integrations import send_staff_reply_to_channel
-
             send_staff_reply_to_channel(db, conversation, content)
             delivery = "sent"
-
         except Exception:
             logger.exception(
-                "Failed to deliver staff reply for handoff %s "
-                "to channel %s",
+                "Failed to deliver staff reply for handoff %s to channel %s",
                 handoff_id,
                 conversation.channel,
             )
