@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models import User, Handoff, Conversation, Message
 from app.services.handoff_service import create_handoff
+from app.routers.messaging_integrations import send_staff_reply_to_channel
 
 router = APIRouter(prefix="/handoffs", tags=["Human Handoff"])
 

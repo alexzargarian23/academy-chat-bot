@@ -35,6 +35,7 @@ from app.models.channel_event import ChannelEvent
 from app.routers.documents import UPLOAD_DIR, get_accessible_document
 from app.services.assistant_service import run_assistant
 from app.services.google_drive_service import download_drive_file
+from app.routers.messaging_integrations import send_staff_reply_to_channel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations", tags=["Messaging integrations"])
