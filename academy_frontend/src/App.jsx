@@ -1,3 +1,4 @@
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './email-assistant.css';
 import {
@@ -303,6 +304,7 @@ function EmailAssistantView({ initialNotice = '' }) {
   const [actionBusy, setActionBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(initialNotice);
+  const [confirmSend, setConfirmSend] = useState(false);
 
   const selectedEmail = emails.find(
     (email) => email.id === selected
@@ -443,25 +445,21 @@ function EmailAssistantView({ initialNotice = '' }) {
     }
   }
 
-  async function sendReply() {
-    if (!selectedEmail) return;
+  function sendReply() {
+    if (!selectedEmail || actionBusy) return;
+    setConfirmSend(true);
+  }
 
-    if (
-      !window.confirm(
-        `Send this reply to ${selectedEmail.sender}?`
-      )
-    ) {
-      return;
-    }
+  async function confirmSendReply() {
+    if (!selectedEmail || actionBusy) return;
 
+    setConfirmSend(false);
     setError('');
     setActionBusy(true);
 
     try {
       await emailAssistant.send(selectedEmail.id);
-
       await refresh();
-
       setNotice('Reply sent successfully.');
     } catch (err) {
       setError(err.message);
@@ -740,6 +738,49 @@ function EmailAssistantView({ initialNotice = '' }) {
           </div>
         </>
       )}
+
+      {confirmSend && selectedEmail && (
+        <div
+          className="academy-modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !actionBusy) setConfirmSend(false);
+          }}
+        >
+          <section
+            className="academy-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="send-email-title"
+          >
+            <div className="academy-modal-icon"><Send size={20} /></div>
+            <h2 id="send-email-title">Send this email?</h2>
+            <p>
+              Your approved reply will be sent to <strong>{selectedEmail.sender}</strong>.
+              Please make sure the message is ready to send.
+            </p>
+            <div className="academy-modal-actions">
+              <button
+                type="button"
+                className="email-secondary-btn"
+                disabled={actionBusy}
+                onClick={() => setConfirmSend(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="email-primary-btn"
+                disabled={actionBusy}
+                onClick={confirmSendReply}
+              >
+                <Send size={15} />
+                {actionBusy ? 'Sending...' : 'Confirm send'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -851,6 +892,8 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [view, setView] = useState('chat');
   const [gmailNotice, setGmailNotice] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   // This version currently provides the public guest welcome suggestions.
   const suggestions = SUGGESTIONS_BY_ROLE[user?.role] || SUGGESTIONS_BY_ROLE.guest;
@@ -1047,22 +1090,35 @@ export default function App() {
     }
   }
 
-  async function removeConversation(id) {
+  function removeConversation(id) {
     const conversation = items.find((x) => x.id === id);
-    const label = conversation?.title || 'New conversation';
-    if (!window.confirm(`Delete “${label}”? This cannot be undone.`)) return;
+    setDeleteTarget({
+      id,
+      title: conversation?.title || 'New conversation',
+    });
+  }
 
+  async function confirmDeleteConversation() {
+    if (!deleteTarget || deleteBusy) return;
+
+    const id = deleteTarget.id;
+    setDeleteBusy(true);
     setError('');
+
     try {
       await chats.remove(id);
       const remaining = items.filter((x) => x.id !== id);
       setItems(remaining);
+      setDeleteTarget(null);
+
       if (active === id) {
         if (remaining[0]) await open(remaining[0].id);
         else newChat();
       }
     } catch (err) {
       setError(err.message);
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -1361,6 +1417,49 @@ export default function App() {
         </div>
         )}
       </main>
+
+      {deleteTarget && (
+        <div
+          className="academy-modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !deleteBusy) setDeleteTarget(null);
+          }}
+        >
+          <section
+            className="academy-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-conversation-title"
+          >
+            <div className="academy-modal-icon"><Trash2 size={20} /></div>
+            <h2 id="delete-conversation-title">Delete conversation?</h2>
+            <p>
+              Are you sure you want to delete <strong>“{deleteTarget.title}”</strong>?
+              This action cannot be undone.
+            </p>
+            <div className="academy-modal-actions">
+              <button
+                type="button"
+                className="email-secondary-btn"
+                disabled={deleteBusy}
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="email-primary-btn"
+                disabled={deleteBusy}
+                onClick={confirmDeleteConversation}
+              >
+                <Trash2 size={15} />
+                {deleteBusy ? 'Deleting...' : 'Confirm delete'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
