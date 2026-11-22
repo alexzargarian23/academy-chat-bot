@@ -223,7 +223,14 @@ def _is_smalltalk(question: str) -> bool:
 
 
 def _get_cited_sources(answer: str, sources: list[dict]) -> list[dict]:
-    """Return only retrieved documents explicitly cited in the final answer."""
+    """Return cited sources, or grounded retrieved sources if the model omits markers.
+
+    The model sometimes names the source document in prose without emitting a
+    [Source N] marker. In that case, keep the retrieved source metadata so the
+    website and messaging integrations can still show/attach the supporting file.
+    Off-topic questions and ungrounded/refusal paths are filtered before this
+    helper is called.
+    """
     cited_ids = {
         int(match)
         for match in re.findall(
@@ -234,14 +241,15 @@ def _get_cited_sources(answer: str, sources: list[dict]) -> list[dict]:
     }
 
     if not cited_ids:
-        return []
+        return list(sources or [])
 
-    return [
+    cited_sources = [
         source
         for source in sources
         if str(source.get("source_id", "")).isdigit()
         and int(source["source_id"]) in cited_ids
     ]
+    return cited_sources or list(sources or [])
 
 
 def _is_out_of_scope(
