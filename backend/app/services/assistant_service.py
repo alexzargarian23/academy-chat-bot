@@ -198,6 +198,7 @@ ACADEMY_TOPIC_TERMS = (
     "student", "applicant", "campus", "class", "certificate", "policy",
     "deadline", "registration", "exam", "attendance", "grade", "appointment",
     "diploma", "degree", "scholarship", "refund", "invoice",
+    "internship", "intern", "engineer", "field guide", "academy guide",
     "ընդունելություն", "դիմում", "ուսման վարձ", "վճար", "ծրագիր",
     "դասընթաց", "դասացուցակ", "ուսանող", "քննություն", "հաճախում",
     "поступление", "заявление", "обучение", "оплата", "стоимость",
@@ -219,6 +220,46 @@ def _is_smalltalk(question: str) -> bool:
         r"hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you|help|what can you do|who are you",
         normalized,
     ))
+
+
+def _get_cited_sources(answer: str, sources: list[dict]) -> list[dict]:
+    """Return only retrieved documents explicitly cited in the final answer."""
+    cited_ids = {
+        int(match)
+        for match in re.findall(
+            r"\[Source\s+(\d+)\b",
+            answer or "",
+            re.IGNORECASE,
+        )
+    }
+
+    if not cited_ids:
+        return []
+
+    return [
+        source
+        for source in sources
+        if str(source.get("source_id", "")).isdigit()
+        and int(source["source_id"]) in cited_ids
+    ]
+
+
+def _is_out_of_scope(
+    question: str,
+    lead_generation_context: bool,
+    history: list[dict[str, str]] | None = None,
+) -> bool:
+    """Reject unrelated messages before retrieval can attach unrelated files."""
+    if lead_generation_context or _is_smalltalk(question):
+        return False
+
+    # Short follow-ups such as "how long is it?" inherit the active Academy
+    # topic from recent conversation instead of being rejected as off-topic.
+    recent_academy_context = any(
+        _is_academy_question(item.get("content", ""))
+        for item in (history or [])[-4:]
+    )
+    return not (_is_academy_question(question) or recent_academy_context)
 
 
 # --- Lead-generation context detection ---
@@ -514,6 +555,22 @@ def run_assistant(
         question,
     )
 
+    # Scope-check BEFORE retrieval. Otherwise an unrelated prompt such as
+    # "print hello" can retrieve an arbitrary PDF and expose it as a citation.
+    if _is_out_of_scope(question, lead_generation_context, history):
+        return {
+            "answer": (
+                "I’m sorry, but I can only help with Academy-related "
+                "information. If you need assistance with that, please let me know."
+            ),
+            "sources": [],
+            "handoff_required": False,
+            "handoff_reason": None,
+            "handoff_id": None,
+            "handoff_reference": None,
+            "actions": [],
+        }
+
     sources, retrieved_context = retrieve_sources(
         question,
         db,
@@ -613,7 +670,7 @@ def run_assistant(
                             "so I've forwarded your question to the Academy team. "
                             f"Your reference number is {ticket.reference_code or ticket.id}."
                         ),
-                        "sources": sources,
+                        "sources": [],
                         "handoff_required": True,
                         "handoff_reason": handoff_reason,
                         "handoff_id": ticket.id,
@@ -636,7 +693,11 @@ def run_assistant(
 
             return {
                 "answer": answer,
-                "sources": sources,
+                "sources": (
+                    _get_cited_sources(answer, sources)
+                    if not handoff_required
+                    else []
+                ),
                 "handoff_required": handoff_required,
                 "handoff_reason": handoff_reason,
                 "handoff_id": handoff_id,
@@ -816,7 +877,11 @@ def run_assistant(
 
     return {
         "answer": fallback_answer,
-        "sources": sources,
+        "sources": (
+            _get_cited_sources(fallback_answer, sources)
+            if not handoff_required and grounded
+            else []
+        ),
         "handoff_required": handoff_required,
         "handoff_reason": handoff_reason,
         "handoff_id": handoff_id,
