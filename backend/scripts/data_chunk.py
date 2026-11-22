@@ -45,7 +45,7 @@ from pgvector.sqlalchemy import Vector
 # PATHS
 # --------------------------------------------------
 
-SOURCE_DIR = Path("/Users/alex/Desktop/Ai")
+SOURCE_DIR = Path("/Users/alex/Desktop/AI folder")
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ENV_FILE = BACKEND_DIR / ".env"
 
@@ -78,69 +78,196 @@ CONFIRMATION_TEXT = "RE-EMBED DOCUMENTS"
 # Visibility must be one of: public, student, staff, admin.
 # ("public" is what guests can see.)
 
+
 DOCUMENTS = [
     {
-        "filename": "Ai class arm.docx",
-        "title": "AI Class — Armenian",
+        "filename": "Academy policy arm.docx",
+        "title": "Academy Policy — Armenian",
         "language": "hy",
         "visibility": "public",
     },
     {
-        "filename": "Ai class eng.docx",
-        "title": "AI Class — English",
+        "filename": "Academy policy en.docx",
+        "title": "Academy Policy — English",
         "language": "en",
         "visibility": "public",
     },
     {
-        "filename": "Ai class ru.docx",
-        "title": "AI Class — Russian",
+        "filename": "Academy policy ru.docx",
+        "title": "Academy Policy — Russian",
         "language": "ru",
         "visibility": "public",
     },
     {
-        "filename": "Ai class schedule.docx",
-        "title": "AI Class Schedule",
-        "language": "en",
-        "visibility": "student",
-    },
-    {
-        "filename": "List of team mebers en.docx",
-        "title": "List of Team Members — English",
-        "language": "en",
-        "visibility": "student",
-    },
-    {
-        "filename": "List of team mebers hy.docx",
-        "title": "List of Team Members — Armenian",
+        "filename": "Advantages of Picsart Academy arm.docx",
+        "title": "Advantages of Picsart Academy — Armenian",
         "language": "hy",
-        "visibility": "student",
+        "visibility": "public",
     },
     {
-        "filename": "List of team mebers ru.docx",
-        "title": "List of Team Members — Russian",
+        "filename": "Advantages of Picsart Academy en.docx",
+        "title": "Advantages of Picsart Academy — English",
+        "language": "en",
+        "visibility": "public",
+    },
+    {
+        "filename": "Advantages of Picsart Academy ry.docx",
+        "title": "Advantages of Picsart Academy — Russian",
         "language": "ru",
-        "visibility": "student",
+        "visibility": "public",
     },
     {
-        "filename": "List of Tools and Software for Student Fellowship Program.docx",
-        "title": "Tools and Software for Student Fellowship Program",
+        "filename": "AI Application Development en.docx",
+        "title": "AI Application Development — English",
         "language": "en",
-        "visibility": "admin",
+        "visibility": "public",
     },
     {
-        "filename": "The Intern Engineer’s Field Guide.pdf",
-        "title": "The Intern Engineer’s Field Guide",
+        "filename": "AI Application Development HY.docx",
+        "title": "AI Application Development — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI Application Development ru.docx",
+        "title": "AI Application Development — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI Engineer class content en.docx",
+        "title": "AI Engineer Class Content — English",
         "language": "en",
-        "visibility": "student",
+        "visibility": "public",
     },
     {
-        "filename": "Picsart courses en.docx",
-        "path": Path("/Users/alex/Desktop/Picsart courses en.docx"),
-        "title": "Picsart Courses — English",
+        "filename": "AI Engineer class content hy.docx",
+        "title": "AI Engineer Class Content — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI Engineer class content ry.docx",
+        "title": "AI Engineer Class Content — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI Graphic Design en.docx",
+        "title": "AI Graphic Design — English",
+        "language": "en",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI Graphic Design hy.docx",
+        "title": "AI Graphic Design — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI Graphic Design ru.docx",
+        "title": "AI Graphic Design — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI junior hy.docx",
+        "title": "AI Junior — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI junior ru.docx",
+        "title": "AI Junior — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI UX en.docx",
+        "title": "AI UX — English",
+        "language": "en",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI UX hy.docx",
+        "title": "AI UX — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "AI UX ru.docx",
+        "title": "AI UX — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "Course for Conscripts (1991) en.docx",
+        "title": "Course for Conscripts (1991) — English",
+        "language": "en",
+        "visibility": "public",
+    },
+    {
+        "filename": "Course for Conscripts (1991) ru.docx",
+        "title": "Course for Conscripts (1991) — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "Course for Conscripts (ATMK) en.docx",
+        "title": "Course for Conscripts (ATMK) — English",
+        "language": "en",
+        "visibility": "public",
+    },
+    {
+        "filename": "Course for Conscripts (ATMK) hy.docx",
+        "title": "Course for Conscripts (ATMK) — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "Course for Conscripts (ATMK) ru.docx",
+        "title": "Course for Conscripts (ATMK) — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "Courses Academy offers en.docx",
+        "title": "Courses Academy Offers — English",
+        "language": "en",
+        "visibility": "public",
+    },
+    {
+        "filename": "Courses Academy offers hy.docx",
+        "title": "Courses Academy Offers — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "Courses Academy offers rn.docx",
+        "title": "Courses Academy Offers — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "FQA hy.docx",
+        "title": "FAQ — Armenian",
+        "language": "hy",
+        "visibility": "public",
+    },
+    {
+        "filename": "FQA ru.docx",
+        "title": "FAQ — Russian",
+        "language": "ru",
+        "visibility": "public",
+    },
+    {
+        "filename": "Picsart_Academy_Rules.pdf",
+        "title": "Picsart Academy Rules",
         "language": "en",
         "visibility": "public",
     },
 ]
+
 
 
 # --------------------------------------------------
