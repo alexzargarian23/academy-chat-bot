@@ -19,6 +19,7 @@ from app.services.assistant_tools import (
     tool_request_human,
 )
 from app.services.retrieval_service import search_knowledge
+from app.services.handoff_service import create_automatic_handoff
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_FILE)
@@ -190,6 +191,22 @@ def _tools_for_role(role: str) -> list[dict]:
         if tool["function"]["name"] in GUEST_TOOLS
     ]
 
+
+ACADEMY_TOPIC_TERMS = (
+    "academy", "admission", "application", "enroll", "enrol", "tuition", "fee",
+    "payment", "program", "course", "curriculum", "schedule", "timetable",
+    "student", "applicant", "campus", "class", "certificate", "policy",
+    "deadline", "registration", "exam", "attendance", "grade", "appointment",
+    "diploma", "degree", "scholarship", "refund", "invoice",
+    "ընդունելություն", "դիմում", "ուսման վարձ", "վճար", "ծրագիր",
+    "դասընթաց", "դասացուցակ", "ուսանող", "քննություն", "հաճախում",
+    "поступление", "заявление", "обучение", "оплата", "стоимость",
+    "программа", "курс", "расписание", "студент", "экзамен",
+)
+
+def _is_academy_question(question: str) -> bool:
+    value = (question or "").lower()
+    return any(term in value for term in ACADEMY_TOPIC_TERMS)
 
 def _is_smalltalk(question: str) -> bool:
     normalized = re.sub(
@@ -536,6 +553,8 @@ def run_assistant(
 
     handoff_required = False
     handoff_reason = None
+    handoff_id = None
+    handoff_reference = None
 
     # Pre-retrieved documents count as grounding. Previously this was
     # always False until a tool ran, which discarded good answers.
@@ -570,11 +589,37 @@ def run_assistant(
                     "Groq returned an empty answer"
                 )
 
+            answer_indicates_uncertainty = any(phrase in answer.lower() for phrase in (
+                "can't verify", "cannot verify", "couldn't verify", "not enough information",
+                "don't have enough information", "do not have enough information",
+                "unable to confirm", "cannot confirm from the available",
+            ))
             if (
-                not grounded
+                (not grounded or answer_indicates_uncertainty)
                 and not handoff_required
                 and not lead_generation_context
             ):
+                if _is_academy_question(question) and not _is_smalltalk(question):
+                    ticket = create_automatic_handoff(
+                        conversation, db, user, question,
+                        reason="The assistant could not verify the Academy information requested.",
+                    )
+                    handoff_required = True
+                    handoff_reason = "insufficient_information"
+                    action_results.append({"tool": "automatic_handoff", "created": True, "handoff_id": ticket.id, "reference_code": ticket.reference_code})
+                    return {
+                        "answer": (
+                            "I couldn't verify this information from the available Academy resources, "
+                            "so I've forwarded your question to the Academy team. "
+                            f"Your reference number is {ticket.reference_code or ticket.id}."
+                        ),
+                        "sources": sources,
+                        "handoff_required": True,
+                        "handoff_reason": handoff_reason,
+                        "handoff_id": ticket.id,
+                        "handoff_reference": ticket.reference_code,
+                        "actions": action_results,
+                    }
                 return {
                     "answer": (
                         SMALLTALK_RESPONSE
@@ -584,6 +629,8 @@ def run_assistant(
                     "sources": [],
                     "handoff_required": False,
                     "handoff_reason": None,
+                    "handoff_id": None,
+                    "handoff_reference": None,
                     "actions": action_results,
                 }
 
@@ -592,6 +639,8 @@ def run_assistant(
                 "sources": sources,
                 "handoff_required": handoff_required,
                 "handoff_reason": handoff_reason,
+                "handoff_id": handoff_id,
+                "handoff_reference": handoff_reference,
                 "actions": action_results,
             }
 
@@ -640,6 +689,8 @@ def run_assistant(
                     if result.get("created"):
                         handoff_required = True
                         handoff_reason = args.get("reason")
+                        handoff_id = result.get("handoff_id")
+                        handoff_reference = result.get("reference_code")
 
                     action_results.append({
                         "tool": name,
@@ -720,6 +771,15 @@ def run_assistant(
             and not handoff_required
             and not lead_generation_context
         ):
+            if _is_academy_question(question):
+                ticket = create_automatic_handoff(conversation, db, user, question)
+                return {
+                    "answer": f"I couldn't find verified information for this Academy question, so I've forwarded it to the Academy team. Your reference number is {ticket.reference_code or ticket.id}.",
+                    "sources": [], "handoff_required": True,
+                    "handoff_reason": "insufficient_information",
+                    "handoff_id": ticket.id, "handoff_reference": ticket.reference_code,
+                    "actions": action_results,
+                }
             return {
                 "answer": NO_GROUNDED_ANSWER,
                 "sources": [],
@@ -746,10 +806,20 @@ def run_assistant(
             )
         )
 
+    if not handoff_required and not lead_generation_context and not grounded and _is_academy_question(question):
+        ticket = create_automatic_handoff(conversation, db, user, question, reason="The assistant could not complete the Academy enquiry reliably.")
+        handoff_required = True
+        handoff_reason = "insufficient_information"
+        handoff_id = ticket.id
+        handoff_reference = ticket.reference_code
+        fallback_answer = f"I couldn't complete this Academy enquiry reliably, so I've forwarded it to the Academy team. Your reference number is {handoff_reference or handoff_id}."
+
     return {
         "answer": fallback_answer,
         "sources": sources,
         "handoff_required": handoff_required,
         "handoff_reason": handoff_reason,
+        "handoff_id": handoff_id,
+        "handoff_reference": handoff_reference,
         "actions": action_results,
     }

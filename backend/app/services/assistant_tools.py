@@ -508,9 +508,9 @@ def tool_capture_applicant_interest(db: Session, user: User, args: dict) -> dict
 
 def tool_request_human(db: Session, user: User, conversation: Any, args: dict) -> dict:
     reason = str(args.get("reason", "Student requested Academy staff assistance"))[:255]
-    handoff = create_handoff(conversation, db, user.id, reason)
+    handoff = create_handoff(conversation, db, user.id, reason, trigger_type="user_requested", question=args.get("question"), channel=getattr(conversation, "channel", None))
     db.flush()
-    return {"created": True, "handoff_id": handoff.id, "status": handoff.status,
+    return {"created": True, "handoff_id": handoff.id, "reference_code": handoff.reference_code, "status": handoff.status,
             "message": "Your request for staff assistance has been sent."}
 
 
