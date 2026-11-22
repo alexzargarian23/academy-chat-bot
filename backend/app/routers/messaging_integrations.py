@@ -293,6 +293,57 @@ def _collect_source_files(
     return files
 
 
+def _format_channel_answer(answer: str, provider: str) -> str:
+    """Format assistant Markdown for Telegram/Slack only; never the website."""
+    text = (answer or "").replace("\r\n", "\n").replace("\r", "\n")
+
+    # Remove fenced-code markers but keep the code content.
+    text = re.sub(r"```[A-Za-z0-9_+-]*\s*\n?(.*?)```", r"\1", text, flags=re.S)
+    # Citations become readable labels; referenced files are attached separately.
+    text = re.sub(
+        r"[\[【]\s*(Sources?\s+\d+(?:\s*,\s*\d+)*[^ \]】]*)[\]】]",
+        r"\1",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1 (\2)", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+
+    # Messaging apps do not support GitHub-style Markdown tables. Turn them
+    # into compact text rows before applying platform-specific emphasis.
+    rendered_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if cells and all(
+                re.fullmatch(r":?-{2,}:?", cell.replace(" ", "")) for cell in cells
+            ):
+                continue
+            line = "  • " + " | ".join(cell for cell in cells if cell)
+        rendered_lines.append(line)
+    text = "\n".join(rendered_lines)
+
+    if provider == "slack":
+        # Slack mrkdwn bold syntax is *text*, unlike Markdown's **text**.
+        text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+        text = re.sub(r"__(.+?)__", r"*\1*", text)
+        text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", r"*\1*", text)
+        text = re.sub(r"(?m)^\s*[-+*]\s+", "• ", text)
+        text = re.sub(r"(?m)^\s*(?:---+|\*\*\*+)\s*$", "", text)
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    # Telegram is sent without parse_mode, so remove Markdown markers.
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text)
+    text = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", text)
+    text = re.sub(r"(?m)^\s*[-+*]\s+", "• ", text)
+    text = re.sub(r"(?m)^\s*(?:---+|\*\*\*+)\s*$", "", text)
+
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def _send_answer_and_sources(
     provider: str,
     destination: int | str,
@@ -303,7 +354,9 @@ def _send_answer_and_sources(
     thread_ts: str | None = None,
 ) -> None:
     source_files = _collect_source_files(db, user, sources) if user and sources else []
-    message = answer
+    # Format only the outbound messaging-platform copy. The database answer and
+    # website API response remain unchanged, preserving web Markdown/citations.
+    message = _format_channel_answer(answer, provider)
     if source_files:
         message += "\n\n📎 The referenced Academy document(s) are attached."
 
@@ -623,8 +676,6 @@ def _process_inbound(
     result = run_assistant(question[:2000], db, user, conversation, history)
     answer = result.get("answer") or "I'm sorry, I couldn't prepare a response. Please contact Academy staff."
     handoff_required = bool(result.get("handoff_required"))
-
-    # Defense in depth: never attach retrieved PDFs to a refusal or handoff.
     normalized_answer = answer.casefold()
     refusal_markers = (
         "i can only help with academy",
@@ -638,6 +689,7 @@ def _process_inbound(
         "i couldn't complete that request reliably",
     )
     is_refusal = any(marker in normalized_answer for marker in refusal_markers)
+    # Never persist/attach retrieved PDFs for a refusal or human handoff.
     sources = [] if handoff_required or is_refusal else (result.get("sources") or [])
 
     db.add(Message(
@@ -848,3 +900,4 @@ def send_staff_reply_to_channel(db: Session, conversation: Conversation, content
             conversation.channel_thread_id or None,
         )
     # Website conversations need no external delivery.
+
