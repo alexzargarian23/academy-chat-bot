@@ -600,3 +600,32 @@ body,
     align-self: flex-start !important;
     aspect-ratio: 1 / 1 !important;
 }
+
+/* ===== Sidebar spacing and cursor fixes ===== */
+
+/* Add breathing room before conversation history */
+.history-title {
+    margin-top: 18px !important;
+}
+
+/* Make the entire conversation item clickable-looking */
+.history-item {
+    cursor: pointer !important;
+}
+
+/* Keep pointer cursor over conversation title and date */
+.history-item-copy,
+.history-item-copy b,
+.history-item-copy small {
+    cursor: pointer !important;
+}
+
+/* Keep the delete button independently clickable */
+.history-item .delete-chat {
+    cursor: pointer !important;
+}
+
+/* Smooth hover feedback */
+.history-item {
+    transition: background-color 0.18s ease;
+}
