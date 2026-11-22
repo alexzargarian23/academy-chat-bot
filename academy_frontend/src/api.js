@@ -3,9 +3,9 @@ const BASE = (
   import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 ).replace(/\/$/, '');
 
-// ─────────────────────────────────────────────
-// AUTH TOKEN
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
+// TOKEN MANAGEMENT
+// ─────────────────────────────────────
 
 export const token = () => localStorage.getItem('concierge_token');
 
@@ -17,9 +17,9 @@ export const clearToken = () => {
   localStorage.removeItem('concierge_token');
 };
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 // BASE API REQUEST
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 
 export async function api(path, options = {}) {
   const headers = {
@@ -40,9 +40,11 @@ export async function api(path, options = {}) {
       ...options,
       headers,
     });
-  } catch {
+  } catch (error) {
+    console.error('API connection error:', error);
+
     throw new Error(
-      'Cannot connect to the Academy server. Check that the backend is running.'
+      'Cannot connect to the Academy server. Please check your connection.'
     );
   }
 
@@ -61,11 +63,11 @@ export async function api(path, options = {}) {
   return data;
 }
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 // DOCUMENT DOWNLOAD
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 
-export async function downloadDocument(url, filename) {
+export async function downloadDocument(documentId) {
   const headers = {};
   const accessToken = token();
 
@@ -73,95 +75,111 @@ export async function downloadDocument(url, filename) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
 
-  const response = await fetch(`${BASE}${url}`, { headers });
+  const response = await fetch(
+    `${BASE}/documents/${documentId}/download`,
+    { headers }
+  );
 
   if (!response.ok) {
     throw new Error('Failed to download document.');
   }
 
   const blob = await response.blob();
-  const objectUrl = window.URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
 
   const link = document.createElement('a');
-  link.href = objectUrl;
-  link.download = filename || 'document';
+  link.href = url;
+  link.download = `document-${documentId}`;
 
   document.body.appendChild(link);
   link.click();
   link.remove();
 
-  window.URL.revokeObjectURL(objectUrl);
+  URL.revokeObjectURL(url);
 }
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 // AUTHENTICATION
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 
 export const auth = {
+  checkEmail: (email) =>
+    api('/users/check-email', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
   login: (email, password) =>
-    api('/auth/login', {
+    api('/users/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
 
-  register: (payload) =>
-    api('/auth/register', {
+  register: (full_name, email, password) =>
+    api('/users/register', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        full_name,
+        email,
+        password,
+      }),
     }),
 
-  me: () => api('/auth/me'),
+  me: () => api('/users/me'),
 };
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 // CHAT
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 
 export const chats = {
-  list: () => api('/chats'),
+  list: () => api('/conversations/'),
 
-  get: (id) => api(`/chats/${id}`),
-
-  create: (payload = {}) =>
-    api('/chats', {
+  create: () =>
+    api('/conversations/', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        channel: 'website',
+        language: navigator.language?.slice(0, 2) || 'en',
+      }),
     }),
 
-  send: (chatId, message) =>
-    api(`/chats/${chatId}/messages`, {
+  messages: (id) =>
+    api(`/conversations/${id}/messages`),
+
+  send: (conversation_id, question) =>
+    api('/ai/chat', {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({
+        conversation_id,
+        question,
+      }),
     }),
 
-  delete: (id) =>
-    api(`/chats/${id}`, {
+  remove: (id) =>
+    api(`/conversations/${id}`, {
       method: 'DELETE',
     }),
 };
 
-// ─────────────────────────────────────────────
-// GMAIL EMAIL ASSISTANT (ADMIN)
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
+// GMAIL EMAIL ASSISTANT
+// ─────────────────────────────────────
 
 export const emailAssistant = {
-  // Check Gmail connection status
   connection: () =>
     api('/email-assistant/connection'),
 
-  // Start Google OAuth connection
   connect: () =>
     api('/email-assistant/connect', {
       method: 'POST',
     }),
 
-  // Sync Gmail inbox
   sync: () =>
     api('/email-assistant/sync', {
       method: 'POST',
     }),
 
-  // Get email messages, optionally filtered by status
   messages: (status) => {
     const query = status
       ? `?status_filter=${encodeURIComponent(status)}`
@@ -170,30 +188,24 @@ export const emailAssistant = {
     return api(`/email-assistant/messages${query}`);
   },
 
-  // Generate an AI reply draft using Academy knowledge
-  generateDraft: (emailId) =>
-    api(`/email-assistant/${emailId}/draft`, {
+  generateDraft: (id) =>
+    api(`/email-assistant/messages/${id}/draft`, {
       method: 'POST',
     }),
 
-  // Update/edit the generated reply draft
-  updateDraft: (emailId, replyDraft) =>
-    api(`/email-assistant/${emailId}/draft`, {
+  updateDraft: (id, reply_draft) =>
+    api(`/email-assistant/messages/${id}/draft`, {
       method: 'PUT',
-      body: JSON.stringify({
-        reply_draft: replyDraft,
-      }),
+      body: JSON.stringify({ reply_draft }),
     }),
 
-  // Approve the reply
-  approve: (emailId) =>
-    api(`/email-assistant/${emailId}/approve`, {
+  approve: (id) =>
+    api(`/email-assistant/messages/${id}/approve`, {
       method: 'POST',
     }),
 
-  // Send the approved reply through Gmail
-  send: (emailId) =>
-    api(`/email-assistant/${emailId}/send`, {
+  send: (id) =>
+    api(`/email-assistant/messages/${id}/send`, {
       method: 'POST',
     }),
 };
