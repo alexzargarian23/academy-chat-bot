@@ -1,9 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import './email-assistant.css';
 import {
   GraduationCap, MessageCircle, Plus, Search, Send, LogOut, Sparkles,
   UserRound, PanelLeftClose, PanelLeftOpen, ArrowUpRight, Trash2, X,
+  Mail, RefreshCw, Check, Save, ShieldCheck, Inbox,
 } from 'lucide-react';
-import { auth, chats, clearToken, downloadDocument, saveToken, token } from './api';
+
+import {
+  auth,
+  chats,
+  clearToken,
+  downloadDocument,
+  saveToken,
+  token,
+  emailAssistant,
+} from './api';
 
 const dateLabel = (v) =>
   new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -280,6 +291,458 @@ const SUGGESTIONS_BY_ROLE = {
   ],
 };
 
+function EmailAssistantView({ initialNotice = '' }) {
+  const [connection, setConnection] = useState(null);
+  const [emails, setEmails] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState(initialNotice);
+
+  const selectedEmail = emails.find(
+    (email) => email.id === selected
+  ) || null;
+
+  const refresh = useCallback(async () => {
+    setError('');
+
+    try {
+      const [connectionResult, messageResult] = await Promise.all([
+        emailAssistant.connection(),
+        emailAssistant.messages(filter === 'all' ? null : filter),
+      ]);
+
+      const messageList = Array.isArray(messageResult) ? messageResult : [];
+      setConnection(connectionResult);
+      setEmails(messageList);
+
+      setSelected((current) => {
+        if (current && messageList.some((email) => email.id === current)) {
+          return current;
+        }
+
+        return messageList[0]?.id ?? null;
+      });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    setReplyDraft(selectedEmail?.reply_draft || '');
+  }, [selectedEmail?.id, selectedEmail?.reply_draft]);
+
+  async function connectGmail() {
+    setError('');
+    setActionBusy(true);
+
+    try {
+      const result = await emailAssistant.connect();
+
+      if (!result.authorization_url) {
+        throw new Error('Google authorization URL was not returned.');
+      }
+
+      window.location.assign(result.authorization_url);
+    } catch (err) {
+      setError(err.message);
+      setActionBusy(false);
+    }
+  }
+
+  async function syncEmails() {
+    setError('');
+    setNotice('');
+    setSyncing(true);
+
+    try {
+      const result = await emailAssistant.sync();
+
+      await refresh();
+
+      setNotice(
+        result?.message || 'Inbox synchronization completed.'
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function generateDraft() {
+    if (!selectedEmail) return;
+
+    setError('');
+    setActionBusy(true);
+
+    try {
+      const result = await emailAssistant.generateDraft(selectedEmail.id);
+
+      setReplyDraft(result.reply_draft || '');
+
+      await refresh();
+
+      setNotice('AI reply draft generated.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function saveDraft() {
+    if (!selectedEmail || !replyDraft.trim()) return;
+
+    setError('');
+    setActionBusy(true);
+
+    try {
+      await emailAssistant.updateDraft(
+        selectedEmail.id,
+        replyDraft.trim()
+      );
+
+      await refresh();
+
+      setNotice('Draft saved successfully.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function approveDraft() {
+    if (!selectedEmail) return;
+
+    setError('');
+    setActionBusy(true);
+
+    try {
+      await emailAssistant.approve(selectedEmail.id);
+
+      await refresh();
+
+      setNotice('Reply approved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function sendReply() {
+    if (!selectedEmail) return;
+
+    if (
+      !window.confirm(
+        `Send this reply to ${selectedEmail.sender}?`
+      )
+    ) {
+      return;
+    }
+
+    setError('');
+    setActionBusy(true);
+
+    try {
+      await emailAssistant.send(selectedEmail.id);
+
+      await refresh();
+
+      setNotice('Reply sent successfully.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="email-loading">
+        <RefreshCw className="spin" size={22} />
+        Loading Email Assistant...
+      </div>
+    );
+  }
+
+  return (
+    <div className="email-workspace">
+      <div className="email-heading">
+        <div>
+          <span className="eyebrow">ADMIN WORKSPACE</span>
+          <h1>Email Assistant</h1>
+          <p>
+            Manage Academy emails and prepare AI-assisted replies.
+          </p>
+        </div>
+
+        {connection?.connected && (
+          <button
+            type="button"
+            className="email-secondary-btn"
+            onClick={syncEmails}
+            disabled={syncing}
+          >
+            <RefreshCw size={16} className={syncing ? 'spin' : ''} />
+            {syncing ? 'Syncing...' : 'Sync inbox'}
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="email-alert error">
+          {error}
+        </div>
+      )}
+
+      {notice && (
+        <div className="email-alert success">
+          {notice}
+        </div>
+      )}
+
+      {!connection?.connected ? (
+        <div className="email-connect-card">
+          <div className="email-connect-icon">
+            <Mail size={28} />
+          </div>
+
+          <h2>Connect your Academy Gmail account</h2>
+
+          <p>
+            Connect Gmail to synchronize incoming messages, generate
+            AI-assisted replies, and send approved responses.
+          </p>
+
+          <button
+            type="button"
+            className="email-primary-btn"
+            onClick={connectGmail}
+            disabled={actionBusy}
+          >
+            <Mail size={17} />
+            {actionBusy ? 'Connecting...' : 'Connect Gmail'}
+          </button>
+
+          <small>
+            Gmail access is restricted to administrators.
+          </small>
+        </div>
+      ) : (
+        <>
+          <div className="email-connection">
+            <div className="email-connection-icon">
+              <Check size={17} />
+            </div>
+
+            <div>
+              <strong>Gmail connected</strong>
+              <small>{connection.email}</small>
+            </div>
+
+            <span className="email-connected-label">Connected</span>
+          </div>
+
+          <div className="email-filters">
+            {[
+              ['all', 'All emails'],
+              ['received', 'Received'],
+              ['drafted', 'Drafts'],
+              ['approved', 'Approved'],
+              ['sent', 'Sent'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={filter === value ? 'active' : ''}
+                onClick={() => setFilter(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="email-layout">
+            <section className="email-list">
+              <div className="email-list-heading">
+                <strong>
+                  <Inbox size={16} />
+                  Inbox
+                </strong>
+                <span>{emails.length}</span>
+              </div>
+
+              {emails.length === 0 ? (
+                <div className="email-empty">
+                  <Mail size={25} />
+                  <p>No emails found.</p>
+                  <small>Try synchronizing your inbox.</small>
+                </div>
+              ) : (
+                emails.map((email) => (
+                  <button
+                    type="button"
+                    key={email.id}
+                    className={`email-item ${
+                      selected === email.id ? 'selected' : ''
+                    }`}
+                    onClick={() => setSelected(email.id)}
+                  >
+                    <div className="email-item-top">
+                      <strong>{email.sender || 'Unknown sender'}</strong>
+                      <span className={`email-status ${email.status}`}>
+                        {email.status}
+                      </span>
+                    </div>
+
+                    <b>{email.subject || '(No subject)'}</b>
+
+                    <p>
+                      {(email.body || '').slice(0, 100)}
+                    </p>
+                  </button>
+                ))
+              )}
+            </section>
+
+            <section className="email-detail">
+              {!selectedEmail ? (
+                <div className="email-empty">
+                  <Mail size={30} />
+                  <p>Select an email to view its details.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="email-detail-heading">
+                    <div>
+                      <span className="eyebrow">EMAIL DETAILS</span>
+                      <h2>
+                        {selectedEmail.subject || '(No subject)'}
+                      </h2>
+                    </div>
+                    <span className={`email-status ${selectedEmail.status}`}>
+                      {selectedEmail.status}
+                    </span>
+                  </div>
+
+                  <div className="email-metadata">
+                    <p>
+                      <strong>From:</strong> {selectedEmail.sender}
+                    </p>
+                    <p>
+                      <strong>To:</strong> {selectedEmail.recipient}
+                    </p>
+                    <p>
+                      <strong>Date:</strong>{' '}
+                      {selectedEmail.received_at
+                        ? new Date(selectedEmail.received_at).toLocaleString()
+                        : 'Unknown'}
+                    </p>
+                  </div>
+
+                  <div className="email-original">
+                    <h3>Original message</h3>
+                    <div>{selectedEmail.body || 'No message body.'}</div>
+                  </div>
+
+                  <div className="email-reply">
+                    <div className="email-reply-heading">
+                      <h3>
+                        <Sparkles size={17} />
+                        AI-assisted reply
+                      </h3>
+
+                      <button
+                        type="button"
+                        className="email-secondary-btn"
+                        onClick={generateDraft}
+                        disabled={
+                          actionBusy || selectedEmail.status === 'sent'
+                        }
+                      >
+                        <Sparkles size={15} />
+                        Generate draft
+                      </button>
+                    </div>
+
+                    <textarea
+                      value={replyDraft}
+                      onChange={(e) => setReplyDraft(e.target.value)}
+                      placeholder="Generate or write a reply..."
+                      disabled={selectedEmail.status === 'sent'}
+                    />
+
+                    <div className="email-actions">
+                      <button
+                        type="button"
+                        className="email-secondary-btn"
+                        onClick={saveDraft}
+                        disabled={
+                          actionBusy ||
+                          !replyDraft.trim() ||
+                          selectedEmail.status === 'sent'
+                        }
+                      >
+                        <Save size={15} />
+                        Save draft
+                      </button>
+
+                      <button
+                        type="button"
+                        className="email-secondary-btn"
+                        onClick={approveDraft}
+                        disabled={
+                          actionBusy ||
+                          !replyDraft.trim() ||
+                          selectedEmail.status === 'sent' ||
+                          selectedEmail.status === 'approved'
+                        }
+                      >
+                        <ShieldCheck size={15} />
+                        Approve
+                      </button>
+
+                      <button
+                        type="button"
+                        className="email-primary-btn"
+                        onClick={sendReply}
+                        disabled={
+                          actionBusy ||
+                          selectedEmail.status !== 'approved'
+                        }
+                      >
+                        <Send size={15} />
+                        Send reply
+                      </button>
+                    </div>
+
+                    <small className="email-safety-note">
+                      Replies must be reviewed and approved before sending.
+                    </small>
+                  </div>
+                </>
+              )}
+            </section>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
@@ -293,6 +756,8 @@ export default function App() {
   const [error, setError] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState('');
+  const [view, setView] = useState('chat');
+  const [gmailNotice, setGmailNotice] = useState('');
 
   // This version currently provides the public guest welcome suggestions.
   const suggestions = SUGGESTIONS_BY_ROLE[user?.role] || SUGGESTIONS_BY_ROLE.guest;
@@ -313,6 +778,24 @@ export default function App() {
       }
       setChecking(false);
     })();
+  }, []);
+
+  // Handle the redirect back from Google's Gmail authorization flow.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gmailStatus = params.get('gmail');
+
+    if (gmailStatus === 'connected') {
+      setGmailNotice('Gmail connected successfully!');
+      setView('email');
+    } else if (gmailStatus === 'error') {
+      setGmailNotice('Gmail connection failed or was cancelled. Please try again.');
+      setView('email');
+    }
+
+    if (gmailStatus) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
   const open = useCallback(async (id) => {
@@ -504,6 +987,21 @@ export default function App() {
           {!collapsed && 'New conversation'}
         </button>
 
+        {user.role === 'admin' && (
+          <button
+            type="button"
+            className={`email-nav-btn ${view === 'email' ? 'active' : ''}`}
+            onClick={() => {
+              setView('email');
+              setError('');
+            }}
+            title="Email Assistant"
+          >
+            <Mail size={18} />
+            {!collapsed && 'Email Assistant'}
+          </button>
+        )}
+
         {!collapsed && (
           <>
             <div className="history-title">YOUR HISTORY</div>
@@ -588,7 +1086,12 @@ export default function App() {
           </div>
         </header>
 
-        <section className="stage">
+        {view === 'email' && user.role === 'admin' ? (
+          <section className="stage email-stage">
+            <EmailAssistantView initialNotice={gmailNotice} />
+          </section>
+        ) : (
+          <section className="stage">
           {messages.length === 0 && !loading ? (
             <div className="welcome">
               <div className="welcome-icon"><Sparkles /></div>
@@ -682,9 +1185,10 @@ export default function App() {
               <div ref={end} />
             </div>
           )}
-        </section>
+          </section>
+        )}
 
-        {error && (
+        {view === 'chat' && error && (
           <div className="error chat-error">
             {error}
             <button type="button" aria-label="Dismiss error" onClick={() => setError('')}>
@@ -693,6 +1197,7 @@ export default function App() {
           </div>
         )}
 
+        {view === 'chat' && (
         <div className="composer-wrap">
           <form className="composer" onSubmit={send}>
             <textarea
@@ -712,6 +1217,7 @@ export default function App() {
             Academy Concierge can make mistakes. Please verify important information.
           </div>
         </div>
+        )}
       </main>
     </div>
   );
