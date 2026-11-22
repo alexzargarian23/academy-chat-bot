@@ -871,6 +871,8 @@ export default function App() {
   }, []);
 
   const open = useCallback(async (id) => {
+    // Always return to chat when a conversation is selected from the sidebar.
+    setView('chat');
     const req = ++openRequest.current;
     setActive(id);
     setLoading(true);
@@ -912,6 +914,8 @@ export default function App() {
   }, [draft]);
 
   function newChat() {
+    // The New conversation button must leave Email Assistant / Handoffs.
+    setView('chat');
     openRequest.current++; // ignore any in-flight open()
     setLoading(false);
     setActive(null);
