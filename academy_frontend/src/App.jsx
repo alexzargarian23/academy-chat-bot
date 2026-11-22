@@ -3,7 +3,7 @@ import './email-assistant.css';
 import {
   GraduationCap, MessageCircle, Plus, Search, Send, LogOut, Sparkles,
   UserRound, PanelLeftClose, PanelLeftOpen, ArrowUpRight, Trash2, X,
-  Mail, RefreshCw, Check, Save, ShieldCheck, Inbox,
+  Mail, RefreshCw, Check, Save, ShieldCheck, Inbox, Headset, ClipboardList, UserCheck,
 } from 'lucide-react';
 
 import {
@@ -14,6 +14,7 @@ import {
   saveToken,
   token,
   emailAssistant,
+  handoffs,
 } from './api';
 
 const dateLabel = (v) =>
@@ -743,6 +744,77 @@ function EmailAssistantView({ initialNotice = '' }) {
   );
 }
 
+function HumanHandoffsView() {
+  const [items, setItems] = useState([]);
+  const [stats, setStats] = useState({ pending: 0, assigned: 0, resolved: 0 });
+  const [staff, setStaff] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [selectedId, setSelectedId] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [assignee, setAssignee] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const selected = items.find((item) => item.id === selectedId) || null;
+
+  const refresh = useCallback(async () => {
+    setError('');
+    try {
+      const [list, counts, team] = await Promise.all([
+        handoffs.list(filter), handoffs.stats(), handoffs.staff(),
+      ]);
+      setItems(asArray(list)); setStats(counts || {}); setStaff(asArray(team));
+      setSelectedId((current) => current && list.some((x) => x.id === current) ? current : (list[0]?.id ?? null));
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }, [filter]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { setNotes(selected?.staff_notes || ''); setAssignee(selected?.assigned_to_user_id ? String(selected.assigned_to_user_id) : ''); }, [selected?.id, selected?.staff_notes, selected?.assigned_to_user_id]);
+
+  async function perform(action, success) {
+    if (!selected) return;
+    setBusy(true); setError(''); setNotice('');
+    try { await action(); await refresh(); setNotice(success); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
+
+  if (loading) return <div className="email-loading"><RefreshCw className="spin" size={22}/>Loading human handoffs...</div>;
+  return <div className="email-workspace">
+    <div className="email-heading"><div><span className="eyebrow">ACADEMY SUPPORT WORKSPACE</span><h1>Human Handoffs</h1><p>Review conversations that need assistance from Academy staff.</p></div><button className="email-secondary-btn" onClick={refresh}><RefreshCw size={16}/>Refresh</button></div>
+    <div className="handoff-stats">
+      {['pending','assigned','resolved'].map((key) => <div className="handoff-stat" key={key}><strong>{stats[key] || 0}</strong><span>{key}</span></div>)}
+    </div>
+    {error && <div className="email-alert error">{error}</div>}{notice && <div className="email-alert success">{notice}</div>}
+    <div className="email-filters">{[['all','All'],['pending','Pending'],['assigned','Assigned'],['resolved','Resolved']].map(([v,label])=><button key={v} className={filter===v?'active':''} onClick={()=>setFilter(v)}>{label}</button>)}</div>
+    <div className="email-layout handoff-layout">
+      <section className="email-list"><div className="email-list-heading"><strong><ClipboardList size={16}/>Requests</strong><span>{items.length}</span></div>
+        {items.length ? items.map((item)=><button key={item.id} className={`email-item ${selectedId===item.id?'selected':''}`} onClick={()=>setSelectedId(item.id)}>
+          <div className="email-item-top"><strong>{item.requester_name || 'Guest'}</strong><span className={`email-status ${item.status}`}>{item.status}</span></div>
+          <b>{item.reference_code} · {(item.category || 'other').replaceAll('_',' ')}</b><p>{item.ai_summary || item.reason}</p><small>{item.created_at ? new Date(item.created_at).toLocaleString() : ''}</small>
+        </button>) : <div className="email-empty"><Headset size={25}/><p>No handoffs found.</p></div>}
+      </section>
+      <section className="email-detail">
+        {!selected ? <div className="email-empty"><Headset size={30}/><p>Select a handoff to view its details.</p></div> : <>
+          <div className="email-detail-heading"><div><span className="eyebrow">{selected.reference_code}</span><h2>{selected.requester_name || 'Guest'} · {selected.category?.replaceAll('_',' ') || 'Other'}</h2></div><span className={`email-status ${selected.status}`}>{selected.status}</span></div>
+          <div className="email-metadata"><p><strong>Email:</strong> {selected.requester_email || 'Not provided'}</p><p><strong>Role:</strong> {selected.requester_role || 'guest'}</p><p><strong>Channel:</strong> {selected.channel || 'website'}</p><p><strong>Trigger:</strong> {(selected.trigger_type || '').replaceAll('_',' ')}</p><p><strong>Created:</strong> {selected.created_at ? new Date(selected.created_at).toLocaleString() : 'Unknown'}</p><p><strong>Assigned to:</strong> {selected.assigned_to_name || 'Unassigned'}</p></div>
+          <div className="email-original"><h3>AI summary</h3><div>{selected.ai_summary || selected.reason}</div></div>
+          <div className="email-original"><h3>Suggested next action</h3><div>{selected.suggested_action || 'Review the conversation and follow up with the user.'}</div></div>
+          <div className="email-original"><h3>Conversation history</h3><div className="handoff-conversation">{asArray(selected.conversation_context).map((m,i)=><p key={i}><b>{m.sender === 'user' ? 'User' : 'Assistant'}:</b> {m.content}</p>)}</div></div>
+          <div className="email-reply"><h3><UserCheck size={17}/>Staff actions</h3>
+            <label className="handoff-label">Assign to</label><select value={assignee} onChange={(e)=>setAssignee(e.target.value)}><option value="">Select staff member</option>{staff.map((u)=><option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>)}</select>
+            <div className="email-actions"><button className="email-secondary-btn" disabled={busy || !assignee || selected.status==='resolved'} onClick={()=>perform(()=>handoffs.assign(selected.id, Number(assignee)),'Handoff assigned.')}>Assign</button></div>
+            <label className="handoff-label">Internal staff notes</label><textarea value={notes} onChange={(e)=>setNotes(e.target.value)} placeholder="Add internal notes for the Academy team..." />
+            <div className="email-actions"><button className="email-secondary-btn" disabled={busy || !notes.trim() || selected.status==='resolved'} onClick={()=>perform(()=>handoffs.saveNotes(selected.id,notes.trim()),'Notes saved.')}>Save notes</button><button className="email-primary-btn" disabled={busy || selected.status==='resolved'} onClick={()=>window.confirm('Mark this handoff as resolved?') && perform(()=>handoffs.resolve(selected.id,notes.trim() || undefined),'Handoff resolved.')}> <Check size={15}/>Resolve</button></div>
+          </div>
+        </>}
+      </section>
+    </div>
+  </div>;
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
@@ -799,7 +871,6 @@ export default function App() {
   }, []);
 
   const open = useCallback(async (id) => {
-    setView('chat');
     const req = ++openRequest.current;
     setActive(id);
     setLoading(true);
@@ -841,7 +912,6 @@ export default function App() {
   }, [draft]);
 
   function newChat() {
-    setView('chat');
     openRequest.current++; // ignore any in-flight open()
     setLoading(false);
     setActive(null);
@@ -1004,6 +1074,13 @@ export default function App() {
           </button>
         )}
 
+        {(user.role === 'admin' || user.role === 'staff') && (
+          <button type="button" className={`email-nav-btn ${view === 'handoffs' ? 'active' : ''}`} onClick={() => { setView('handoffs'); setError(''); }} title="Human Handoffs">
+            <Headset size={18} />
+            {!collapsed && 'Human Handoffs'}
+          </button>
+        )}
+
         {!collapsed && (
           <>
             <div className="history-title">YOUR HISTORY</div>
@@ -1088,7 +1165,9 @@ export default function App() {
           </div>
         </header>
 
-        {view === 'email' && user.role === 'admin' ? (
+        {view === 'handoffs' && (user.role === 'admin' || user.role === 'staff') ? (
+          <section className="stage email-stage"><HumanHandoffsView /></section>
+        ) : view === 'email' && user.role === 'admin' ? (
           <section className="stage email-stage">
             <EmailAssistantView initialNotice={gmailNotice} />
           </section>

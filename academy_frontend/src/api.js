@@ -1,11 +1,4 @@
-
-const BASE = (
-  import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
-).replace(/\/$/, '');
-
-// ─────────────────────────────────────
-// TOKEN MANAGEMENT
-// ─────────────────────────────────────
+const BASE = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 
 export const token = () => localStorage.getItem('concierge_token');
 
@@ -17,10 +10,6 @@ export const clearToken = () => {
   localStorage.removeItem('concierge_token');
 };
 
-// ─────────────────────────────────────
-// BASE API REQUEST
-// ─────────────────────────────────────
-
 export async function api(path, options = {}) {
   const headers = {
     ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -28,31 +17,24 @@ export async function api(path, options = {}) {
   };
 
   const accessToken = token();
-
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
 
   let response;
-
   try {
     response = await fetch(`${BASE}${path}`, {
       ...options,
       headers,
     });
-  } catch (error) {
-    console.error('API connection error:', error);
-
-    throw new Error(
-      'Cannot connect to the Academy server. Please check your connection.'
-    );
+  } catch {
+    throw new Error('Cannot connect to the Academy server. Check that the backend is running.');
   }
 
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     const detail = data?.detail;
-
     throw new Error(
       typeof detail === 'string'
         ? detail
@@ -63,10 +45,6 @@ export async function api(path, options = {}) {
   return data;
 }
 
-// ─────────────────────────────────────
-// DOCUMENT DOWNLOAD
-// ─────────────────────────────────────
-
 export async function downloadDocument(documentId) {
   const headers = {};
   const accessToken = token();
@@ -75,32 +53,36 @@ export async function downloadDocument(documentId) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
 
-  const response = await fetch(
-    `${BASE}/documents/${documentId}/download`,
-    { headers }
-  );
+  let response;
+  try {
+    response = await fetch(`${BASE}/documents/${documentId}/download`, { headers });
+  } catch {
+    throw new Error('Cannot connect to the Academy server. Check that the backend is running.');
+  }
 
   if (!response.ok) {
-    throw new Error('Failed to download document.');
+    const data = await response.json().catch(() => ({}));
+    throw new Error(
+      typeof data?.detail === 'string'
+        ? data.detail
+        : `Download failed (${response.status})`
+    );
   }
 
   const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
+  const disposition = response.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const filename = match?.[1] || `document-${documentId}`;
 
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `document-${documentId}`;
-
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
-
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-
-// ─────────────────────────────────────
-// AUTHENTICATION
-// ─────────────────────────────────────
 
 export const auth = {
   checkEmail: (email) =>
@@ -118,19 +100,11 @@ export const auth = {
   register: (full_name, email, password) =>
     api('/users/register', {
       method: 'POST',
-      body: JSON.stringify({
-        full_name,
-        email,
-        password,
-      }),
+      body: JSON.stringify({ full_name, email, password }),
     }),
 
   me: () => api('/users/me'),
 };
-
-// ─────────────────────────────────────
-// CHAT
-// ─────────────────────────────────────
 
 export const chats = {
   list: () => api('/conversations/'),
@@ -144,16 +118,12 @@ export const chats = {
       }),
     }),
 
-  messages: (id) =>
-    api(`/conversations/${id}/messages`),
+  messages: (id) => api(`/conversations/${id}/messages`),
 
   send: (conversation_id, question) =>
     api('/ai/chat', {
       method: 'POST',
-      body: JSON.stringify({
-        conversation_id,
-        question,
-      }),
+      body: JSON.stringify({ conversation_id, question }),
     }),
 
   remove: (id) =>
@@ -162,58 +132,52 @@ export const chats = {
     }),
 };
 
-// ─────────────────────────────────────
-// GMAIL EMAIL ASSISTANT
-// ─────────────────────────────────────
-
-
 export const emailAssistant = {
-  // Check Gmail connection
-  connection: () =>
-    api('/email-assistant/connection'),
+  connection: () => api('/email-assistant/connection'),
 
-  // Start Google OAuth authorization
-  connect: () =>
-    api('/email-assistant/connect'),
+  connect: () => api('/email-assistant/connect'),
 
-  // Synchronize Gmail inbox
   sync: () =>
     api('/email-assistant/sync', {
       method: 'POST',
     }),
 
-  // Retrieve emails
-  messages: (status) => {
-    const query = status
-      ? `?status_filter=${encodeURIComponent(status)}`
-      : '';
+  messages: (status) =>
+    api(
+      `/email-assistant/messages${
+        status ? `?status_filter=${encodeURIComponent(status)}` : ''
+      }`
+    ),
 
-    return api(`/email-assistant/messages${query}`);
-  },
-
-  // Generate AI reply
   generateDraft: (id) =>
     api(`/email-assistant/messages/${id}/draft`, {
       method: 'POST',
     }),
 
-  // Update reply draft
   updateDraft: (id, reply_draft) =>
     api(`/email-assistant/messages/${id}/draft`, {
       method: 'PUT',
       body: JSON.stringify({ reply_draft }),
     }),
 
-  // Approve reply
   approve: (id) =>
     api(`/email-assistant/messages/${id}/approve`, {
       method: 'POST',
     }),
 
-  // Send approved reply
   send: (id) =>
     api(`/email-assistant/messages/${id}/send`, {
       method: 'POST',
     }),
 };
 
+
+export const handoffs = {
+  list: (status = 'all') => api(`/handoffs/?status=${encodeURIComponent(status)}`),
+  stats: () => api('/handoffs/stats'),
+  staff: () => api('/handoffs/staff'),
+  detail: (id) => api(`/handoffs/${id}`),
+  assign: (id, staff_user_id) => api(`/handoffs/${id}/assign`, { method: 'PATCH', body: JSON.stringify({ staff_user_id }) }),
+  saveNotes: (id, staff_notes) => api(`/handoffs/${id}/notes`, { method: 'PATCH', body: JSON.stringify({ staff_notes }) }),
+  resolve: (id, staff_notes) => api(`/handoffs/${id}/resolve`, { method: 'PATCH', body: JSON.stringify({ staff_notes }) }),
+};
