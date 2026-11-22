@@ -799,6 +799,7 @@ export default function App() {
   }, []);
 
   const open = useCallback(async (id) => {
+    setView('chat');
     const req = ++openRequest.current;
     setActive(id);
     setLoading(true);
@@ -840,6 +841,7 @@ export default function App() {
   }, [draft]);
 
   function newChat() {
+    setView('chat');
     openRequest.current++; // ignore any in-flight open()
     setLoading(false);
     setActive(null);
