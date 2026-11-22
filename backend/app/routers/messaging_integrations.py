@@ -35,7 +35,6 @@ from app.models.channel_event import ChannelEvent
 from app.routers.documents import UPLOAD_DIR, get_accessible_document
 from app.services.assistant_service import run_assistant
 from app.services.google_drive_service import download_drive_file
-from app.routers.messaging_integrations import send_staff_reply_to_channel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations", tags=["Messaging integrations"])
@@ -463,6 +462,8 @@ def _telegram_auth_response(
     display_name: str,
     language: str,
     question: str,
+    channel_destination: str | None = None,
+    channel_thread_id: str | None = None,
 ) -> str | None:
     if provider != "telegram":
         return None
@@ -471,7 +472,16 @@ def _telegram_auth_response(
 
     if command == "/logout":
         guest = _guest_user(db, provider, external_id, display_name)
-        _bind_identity(db, identity, guest, provider, language, authenticated=False)
+        _bind_identity(
+            db,
+            identity,
+            guest,
+            provider,
+            language,
+            authenticated=False,
+            channel_destination=channel_destination,
+            channel_thread_id=channel_thread_id,
+        )
         db.commit()
         return "You have been logged out. You can still ask about public Academy information."
 
@@ -526,7 +536,16 @@ def _telegram_auth_response(
             db.commit()
             return "Incorrect password. Please try again."
 
-        _bind_identity(db, identity, user, provider, language, authenticated=True)
+        _bind_identity(
+            db,
+            identity,
+            user,
+            provider,
+            language,
+            authenticated=True,
+            channel_destination=channel_destination,
+            channel_thread_id=channel_thread_id,
+        )
         db.commit()
         return "You are authenticated. You can now access the data permitted for your Academy role."
 
@@ -569,7 +588,15 @@ def _process_inbound(
     )
 
     auth_response = _telegram_auth_response(
-        db, identity, provider, external_id, display_name, language, question
+        db,
+        identity,
+        provider,
+        external_id,
+        display_name,
+        language,
+        question,
+        channel_destination=channel_destination,
+        channel_thread_id=channel_thread_id,
     )
     if auth_response is not None:
         event_record.status = "processed"
