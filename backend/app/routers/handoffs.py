@@ -1,3 +1,5 @@
+
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +12,8 @@ from app.models import User, Handoff, Conversation, Message
 from app.services.handoff_service import create_handoff
 
 router = APIRouter(prefix="/handoffs", tags=["Human Handoff"])
+
+logger = logging.getLogger(__name__)
 
 
 class ResolveHandoffRequest(BaseModel):
@@ -34,8 +38,20 @@ def require_staff(user: User):
 
 
 def serialize_handoff(handoff: Handoff, db: Session) -> dict:
-    requester = db.query(User).filter(User.id == handoff.requested_by_user_id).first() if handoff.requested_by_user_id else None
-    assignee = db.query(User).filter(User.id == handoff.assigned_to_user_id).first() if handoff.assigned_to_user_id else None
+    requester = (
+        db.query(User)
+        .filter(User.id == handoff.requested_by_user_id)
+        .first()
+        if handoff.requested_by_user_id else None
+    )
+
+    assignee = (
+        db.query(User)
+        .filter(User.id == handoff.assigned_to_user_id)
+        .first()
+        if handoff.assigned_to_user_id else None
+    )
+
     return {
         "id": handoff.id,
         "reference_code": handoff.reference_code or f"HO-{handoff.id:06d}",
@@ -66,19 +82,29 @@ def request_handoff(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id,
-    ).first()
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+        .first()
+    )
+
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
     handoff = create_handoff(
-        conversation, db, current_user.id,
+        conversation,
+        db,
+        current_user.id,
         "User requested assistance from Academy staff",
         trigger_type="user_requested",
     )
+
     db.commit()
     db.refresh(handoff)
+
     return serialize_handoff(handoff, db)
 
 
@@ -89,111 +115,249 @@ def list_handoffs(
     current_user: User = Depends(get_current_user),
 ):
     require_staff(current_user)
+
     if status not in ["pending", "assigned", "resolved", "all"]:
         raise HTTPException(status_code=400, detail="Invalid handoff status")
+
     query = db.query(Handoff)
+
     if status != "all":
         query = query.filter(Handoff.status == status)
+
     rows = query.order_by(Handoff.created_at.desc()).limit(250).all()
+
     return [serialize_handoff(row, db) for row in rows]
 
 
 @router.get("/stats")
-def handoff_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def handoff_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     require_staff(current_user)
-    return {s: db.query(Handoff).filter(Handoff.status == s).count() for s in ["pending", "assigned", "resolved"]}
+
+    return {
+        status: db.query(Handoff).filter(Handoff.status == status).count()
+        for status in ["pending", "assigned", "resolved"]
+    }
 
 
 @router.get("/staff")
-def list_staff(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_staff(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     require_staff(current_user)
+
     return [
-        {"id": u.id, "full_name": u.full_name, "email": u.email}
-        for u in db.query(User).filter(User.role.in_(["staff", "admin"])).order_by(User.full_name).all()
+        {"id": user.id, "full_name": user.full_name, "email": user.email}
+        for user in (
+            db.query(User)
+            .filter(User.role.in_(["staff", "admin"]))
+            .order_by(User.full_name)
+            .all()
+        )
     ]
 
 
 @router.get("/{handoff_id}")
-def get_handoff(handoff_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_handoff(
+    handoff_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     require_staff(current_user)
+
     row = db.query(Handoff).filter(Handoff.id == handoff_id).first()
+
     if not row:
         raise HTTPException(status_code=404, detail="Handoff not found")
+
     return serialize_handoff(row, db)
 
 
 @router.patch("/{handoff_id}/assign")
-def assign_handoff(handoff_id: int, data: AssignHandoffRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def assign_handoff(
+    handoff_id: int,
+    data: AssignHandoffRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     require_staff(current_user)
+
     row = db.query(Handoff).filter(Handoff.id == handoff_id).first()
+
     if not row:
         raise HTTPException(status_code=404, detail="Handoff not found")
+
     if row.status == "resolved":
-        raise HTTPException(status_code=400, detail="Resolved handoffs cannot be reassigned")
-    staff = db.query(User).filter(User.id == data.staff_user_id, User.role.in_(["staff", "admin"])).first()
+        raise HTTPException(
+            status_code=400,
+            detail="Resolved handoffs cannot be reassigned",
+        )
+
+    staff = (
+        db.query(User)
+        .filter(
+            User.id == data.staff_user_id,
+            User.role.in_(["staff", "admin"]),
+        )
+        .first()
+    )
+
     if not staff:
         raise HTTPException(status_code=404, detail="Staff member not found")
+
     row.assigned_to_user_id = staff.id
     row.status = "assigned"
+
     db.commit()
     db.refresh(row)
+
     return serialize_handoff(row, db)
 
 
 @router.patch("/{handoff_id}/notes")
-def add_handoff_notes(handoff_id: int, data: HandoffNoteRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def add_handoff_notes(
+    handoff_id: int,
+    data: HandoffNoteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     require_staff(current_user)
+
     row = db.query(Handoff).filter(Handoff.id == handoff_id).first()
+
     if not row:
         raise HTTPException(status_code=404, detail="Handoff not found")
+
     if row.status == "resolved":
-        raise HTTPException(status_code=400, detail="Cannot modify a resolved handoff")
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot modify a resolved handoff",
+        )
+
     row.staff_notes = data.staff_notes
+
     db.commit()
     db.refresh(row)
+
     return serialize_handoff(row, db)
 
 
 @router.post("/{handoff_id}/reply")
-def reply_to_handoff(handoff_id: int, data: StaffReplyRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Send a staff message to the user's original conversation."""
+def reply_to_handoff(
+    handoff_id: int,
+    data: StaffReplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Save a staff reply and deliver it to the original external channel."""
+
     require_staff(current_user)
+
     row = db.query(Handoff).filter(Handoff.id == handoff_id).first()
+
     if not row:
         raise HTTPException(status_code=404, detail="Handoff not found")
-    conversation = db.query(Conversation).filter(Conversation.id == row.conversation_id).first()
+
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == row.conversation_id)
+        .first()
+    )
+
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    content = data.content.strip()
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Reply cannot be empty")
+
     now = datetime.now(timezone.utc)
-    message = Message(conversation_id=conversation.id, sender="staff", content=data.content.strip())
+
+    message = Message(
+        conversation_id=conversation.id,
+        sender="staff",
+        content=content,
+    )
+
     conversation.last_response_at = now
     db.add(message)
     db.flush()
+
     row.conversation_context = list(row.conversation_context or []) + [{
-        "sender": "staff", "content": data.content.strip(), "created_at": now.isoformat()
+        "sender": "staff",
+        "content": content,
+        "created_at": now.isoformat(),
     }]
+
+    # Save the reply first so it remains available in the website
+    # even if Telegram or Slack delivery fails.
     db.commit()
     db.refresh(message)
-    return {"id": message.id, "conversation_id": message.conversation_id, "sender": message.sender, "content": message.content, "created_at": message.created_at}
+
+    delivery = "not_required"
+
+    if conversation.channel in {"telegram", "slack"}:
+        try:
+            # Local import avoids a module-level circular import.
+            from app.routers.integrations import send_staff_reply_to_channel
+
+            send_staff_reply_to_channel(db, conversation, content)
+            delivery = "sent"
+
+        except Exception:
+            logger.exception(
+                "Failed to deliver staff reply for handoff %s "
+                "to channel %s",
+                handoff_id,
+                conversation.channel,
+            )
+            delivery = "failed"
+
+    return {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "sender": message.sender,
+        "content": message.content,
+        "created_at": message.created_at,
+        "channel_delivery": delivery,
+    }
 
 
 @router.patch("/{handoff_id}/resolve")
-def resolve_handoff(handoff_id: int, data: ResolveHandoffRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def resolve_handoff(
+    handoff_id: int,
+    data: ResolveHandoffRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Resolve the support ticket without injecting a generic message into the chat."""
+
     require_staff(current_user)
+
     row = db.query(Handoff).filter(Handoff.id == handoff_id).first()
+
     if not row:
         raise HTTPException(status_code=404, detail="Handoff not found")
+
     if row.status == "resolved":
-        raise HTTPException(status_code=400, detail="Handoff is already resolved")
+        raise HTTPException(
+            status_code=400,
+            detail="Handoff is already resolved",
+        )
 
     row.status = "resolved"
     row.assigned_to_user_id = current_user.id
+
     if data.staff_notes is not None:
         row.staff_notes = data.staff_notes
+
     row.resolved_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(row)
+
     return serialize_handoff(row, db)

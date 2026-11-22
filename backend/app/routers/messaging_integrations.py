@@ -333,12 +333,17 @@ def _guest_user(db: Session, provider: str, external_id: str, display_name: str)
     return user
 
 
-def _new_conversation(db: Session, user: User, provider: str, language: str) -> Conversation:
+def _new_conversation(
+    db: Session, user: User, provider: str, language: str,
+    channel_destination: str | None = None, channel_thread_id: str | None = None,
+) -> Conversation:
     conversation = Conversation(
         user_id=user.id,
         channel=provider,
         language=(language or "en")[:10],
         status="active",
+        channel_destination=channel_destination,
+        channel_thread_id=channel_thread_id,
     )
     db.add(conversation)
     db.flush()
@@ -352,8 +357,12 @@ def _bind_identity(
     provider: str,
     language: str,
     authenticated: bool,
+    channel_destination: str | None = None,
+    channel_thread_id: str | None = None,
 ) -> Conversation:
-    conversation = _new_conversation(db, user, provider, language)
+    conversation = _new_conversation(
+        db, user, provider, language, channel_destination, channel_thread_id
+    )
     identity.user_id = user.id
     identity.conversation_id = conversation.id
     identity.authenticated = authenticated
@@ -371,6 +380,8 @@ def _get_identity(
     display_name: str,
     language: str = "en",
     account_email: str | None = None,
+    channel_destination: str | None = None,
+    channel_thread_id: str | None = None,
 ) -> tuple[User, Conversation, ChannelIdentity]:
     identity = db.scalar(select(ChannelIdentity).where(
         ChannelIdentity.provider == provider,
@@ -387,17 +398,23 @@ def _get_identity(
         conversation = db.get(Conversation, identity.conversation_id) if identity.conversation_id else None
         if provider == "slack":
             if registered_user and (not identity.authenticated or identity.user_id != registered_user.id):
-                conversation = _bind_identity(db, identity, registered_user, provider, language, authenticated=True)
+                conversation = _bind_identity(db, identity, registered_user, provider, language, authenticated=True,
+                                               channel_destination=channel_destination, channel_thread_id=channel_thread_id)
                 user = registered_user
             elif not registered_user and identity.authenticated:
                 user = _guest_user(db, provider, external_id, display_name)
-                conversation = _bind_identity(db, identity, user, provider, language, authenticated=False)
+                conversation = _bind_identity(db, identity, user, provider, language, authenticated=False,
+                                               channel_destination=channel_destination, channel_thread_id=channel_thread_id)
         if user and conversation:
             identity.display_name = display_name[:150] or identity.display_name
+            conversation.channel_destination = channel_destination
+            conversation.channel_thread_id = channel_thread_id
             return user, conversation, identity
 
     user = registered_user if provider == "slack" and registered_user else _guest_user(db, provider, external_id, display_name)
-    conversation = _new_conversation(db, user, provider, language)
+    conversation = _new_conversation(
+        db, user, provider, language, channel_destination, channel_thread_id
+    )
     if identity:
         identity.user_id = user.id
         identity.conversation_id = conversation.id
@@ -515,43 +532,6 @@ def _telegram_auth_response(
     return None
 
 
-def _is_handoff_response(result: dict[str, Any], answer: str) -> bool:
-    """Return True when the assistant response represents a human handoff.
-
-    Handoff responses must still be delivered to the messaging channel, but
-    retrieved RAG documents should not be attached to that notification.
-    Prefer explicit metadata from run_assistant; retain a text fallback for
-    assistant-service versions that only return the user-facing answer.
-    """
-    for key in (
-        "handoff_created",
-        "handoff_requested",
-        "requires_handoff",
-        "is_handoff",
-        "human_handoff",
-    ):
-        if result.get(key) is True:
-            return True
-
-    handoff_value = result.get("handoff")
-    if handoff_value is True:
-        return True
-    if isinstance(handoff_value, dict) and handoff_value:
-        return True
-
-    normalized = re.sub(r"\\s+", " ", (answer or "").strip().lower())
-    handoff_phrases = (
-        "your handoff request has been submitted",
-        "handoff request has been submitted",
-        "your handoff has been submitted",
-        "handoff has been submitted",
-        "a handoff has been created",
-        "handoff request was created",
-        "a staff member will contact you",
-    )
-    return any(phrase in normalized for phrase in handoff_phrases)
-
-
 def _process_inbound(
     db: Session,
     provider: str,
@@ -561,6 +541,8 @@ def _process_inbound(
     event_id: str,
     question: str,
     account_email: str | None = None,
+    channel_destination: str | None = None,
+    channel_thread_id: str | None = None,
 ) -> dict[str, Any] | None:
     question = question.strip()
     if not question:
@@ -581,7 +563,8 @@ def _process_inbound(
         db.flush()
 
     user, conversation, identity = _get_identity(
-        db, provider, external_id, display_name, language, account_email
+        db, provider, external_id, display_name, language, account_email,
+        channel_destination, channel_thread_id,
     )
 
     auth_response = _telegram_auth_response(
@@ -612,7 +595,6 @@ def _process_inbound(
     result = run_assistant(question[:2000], db, user, conversation, history)
     answer = result.get("answer") or "I'm sorry, I couldn't prepare a response. Please contact Academy staff."
     sources = result.get("sources") or []
-    suppress_source_attachments = _is_handoff_response(result, answer)
 
     db.add(Message(
         conversation_id=conversation.id,
@@ -624,12 +606,7 @@ def _process_inbound(
     event_record.response_text = answer[:12000]
     db.commit()
 
-    return {
-        "answer": answer,
-        "sources": sources,
-        "user_id": user.id,
-        "suppress_source_attachments": suppress_source_attachments,
-    }
+    return {"answer": answer, "sources": sources, "user_id": user.id}
 
 
 def _process_slack_event_background(payload: dict[str, Any], event_id: str) -> None:
@@ -655,6 +632,8 @@ def _process_slack_event_background(payload: dict[str, Any], event_id: str) -> N
             event_id,
             message_text,
             _slack_user_email(sender_id),
+            channel_destination=channel_id,
+            channel_thread_id=str(thread_ts) if thread_ts else None,
         )
 
         if response:
@@ -663,7 +642,7 @@ def _process_slack_event_background(payload: dict[str, Any], event_id: str) -> N
                 "slack",
                 channel_id,
                 response.get("answer") or "",
-                [] if response.get("suppress_source_attachments") else (response.get("sources") or []),
+                response.get("sources") or [],
                 user,
                 db,
                 str(thread_ts) if thread_ts else None,
@@ -736,6 +715,7 @@ async def telegram_webhook(
             sender.get("language_code", "en"),
             update_id,
             text,
+            channel_destination=str(message["chat"]["id"]),
         )
         if response:
             user = db.get(User, response.get("user_id")) if response.get("user_id") else None
@@ -743,7 +723,7 @@ async def telegram_webhook(
                 "telegram",
                 message["chat"]["id"],
                 response.get("answer") or "",
-                [] if response.get("suppress_source_attachments") else (response.get("sources") or []),
+                response.get("sources") or [],
                 user,
                 db,
             )
@@ -808,3 +788,19 @@ async def slack_events(
 
     return {"ok": True}
 
+
+
+def send_staff_reply_to_channel(db: Session, conversation: Conversation, content: str) -> None:
+    """Deliver a persisted staff reply to the originating Telegram chat or Slack thread."""
+    if conversation.channel == "telegram":
+        if not conversation.channel_destination:
+            raise RuntimeError("Telegram destination is missing for this conversation")
+        _telegram_send(conversation.channel_destination, content)
+    elif conversation.channel == "slack":
+        if not conversation.channel_destination:
+            raise RuntimeError("Slack channel is missing for this conversation")
+        _slack_send(
+            conversation.channel_destination, content,
+            conversation.channel_thread_id or None,
+        )
+    # Website conversations need no external delivery.
