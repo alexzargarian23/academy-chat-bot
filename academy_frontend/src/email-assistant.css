@@ -217,3 +217,20 @@
 .email-status.assigned { background:#eaf1ff; color:#315db2; }
 .email-status.resolved { background:#eaf8ef; color:#247443; }
 @media(max-width:650px) { .handoff-stats { grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; } .handoff-stat { padding:11px; } .handoff-stat strong { font-size:21px; } }
+
+
+/* Unread staff reply indicator in conversation history */
+.history-item-copy {
+  min-width: 0;
+  flex: 1;
+}
+.unread-dot {
+  display: inline-block;
+  flex: 0 0 9px;
+  width: 9px;
+  height: 9px;
+  margin: 0 7px 0 4px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}

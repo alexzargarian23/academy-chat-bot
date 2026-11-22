@@ -879,7 +879,13 @@ export default function App() {
     setError('');
     try {
       const list = await chats.messages(id);
-      if (req === openRequest.current) setMessages(asArray(list));
+      if (req === openRequest.current) {
+        setMessages(asArray(list));
+        // The messages endpoint marks this conversation as read on the server.
+        setItems((current) => current.map((item) =>
+          item.id === id ? { ...item, has_unread_staff_message: false } : item
+        ));
+      }
     } catch (e) {
       if (req === openRequest.current) setError(e.message);
     } finally {
@@ -900,6 +906,21 @@ export default function App() {
       }
     })();
   }, [user, open]);
+
+  // Refresh unread indicators while the user is signed in, including updates
+  // posted by staff while the chat is open in another tab/device.
+  useEffect(() => {
+    if (!user) return undefined;
+    const refreshConversations = async () => {
+      try {
+        setItems(asArray(await chats.list()));
+      } catch {
+        // Keep the current sidebar if a background refresh temporarily fails.
+      }
+    };
+    const timer = window.setInterval(refreshConversations, 12000);
+    return () => window.clearInterval(timer);
+  }, [user]);
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1111,10 +1132,13 @@ export default function App() {
                     }}
                   >
                     <MessageCircle size={16} />
-                    <span>
+                    <span className="history-item-copy">
                       <b>{c.title || 'New conversation'}</b>
                       <small>{dateLabel(c.created_at)}</small>
                     </span>
+                    {c.has_unread_staff_message && active !== c.id && (
+                      <span className="unread-dot" title="New message from Academy Support" aria-label="Unread staff message" />
+                    )}
                     <button
                       className="delete-chat"
                       type="button"
@@ -1227,7 +1251,7 @@ export default function App() {
                     )}
                     <div className="message-body">
                       <div className="meta">
-                        {m.sender === 'user' ? 'You' : 'Academy Assistant'}{' '}
+                        {m.sender === 'user' ? 'You' : m.sender === 'staff' ? 'Academy Support' : 'Academy Assistant'}{' '}
                         <time>
                           {m.created_at
                             ? new Date(m.created_at).toLocaleTimeString([], {
