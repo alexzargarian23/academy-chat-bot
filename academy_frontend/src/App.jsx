@@ -876,14 +876,20 @@ function HumanHandoffsView() {
   </div>;
 }
 
+const ACTIVE_KEY = 'academy_active_conversation';
+const VIEW_KEY = 'academy_active_view';
+const VALID_VIEWS = ['chat', 'email', 'handoffs'];
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
   const [items, setItems] = useState([]);
   const [active, setActive] = useState(() => {
     try {
-      const saved = window.localStorage.getItem('academy_active_conversation');
-      return saved ? Number(saved) : null;
+      const stored = window.localStorage.getItem(ACTIVE_KEY);
+      if (!stored || stored === 'new') return null;
+      const n = Number(stored);
+      return Number.isFinite(n) && n > 0 ? n : null;
     } catch {
       return null;
     }
@@ -896,7 +902,14 @@ export default function App() {
   const [error, setError] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState('');
-  const [view, setView] = useState('chat');
+  const [view, setView] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(VIEW_KEY);
+      return VALID_VIEWS.includes(stored) ? stored : 'chat';
+    } catch {
+      return 'chat';
+    }
+  });
   const [gmailNotice, setGmailNotice] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -912,24 +925,25 @@ export default function App() {
   activeRef.current = active;
   viewRef.current = view;
 
-  // Persist the currently selected conversation for the next page reload.
-  // Do not clear it while the authentication state is still being restored.
+  // Persist the current workspace page. Conversation selection is saved
+  // directly by open(), send(), and newChat() to avoid restore-time races.
   useEffect(() => {
     if (!user) return;
-
     try {
-      if (active !== null && active !== undefined) {
-        window.localStorage.setItem(
-          'academy_active_conversation',
-          String(active)
-        );
-      } else {
-        window.localStorage.removeItem('academy_active_conversation');
-      }
+      window.localStorage.setItem(VIEW_KEY, view);
     } catch {
-      // The chat still works if browser storage is unavailable.
+      // The app remains usable if browser storage is unavailable.
     }
-  }, [active, user]);
+  }, [view, user]);
+
+  // Do not restore staff-only workspaces for users without permission.
+  useEffect(() => {
+    if (!user) return;
+    if (view === 'email' && user.role !== 'admin') setView('chat');
+    if (view === 'handoffs' && user.role !== 'admin' && user.role !== 'staff') {
+      setView('chat');
+    }
+  }, [user, view]);
 
   // Restore session
   useEffect(() => {
@@ -963,12 +977,13 @@ export default function App() {
     }
   }, []);
 
-  const open = useCallback(async (id) => {
-    // Always return to chat when a conversation is selected from the sidebar.
-    setView('chat');
+  const open = useCallback(async (id, { keepView = false } = {}) => {
+    // User-initiated conversation selection returns to chat. Initial restore
+    // passes keepView=true so Email Assistant / Human Handoffs remain selected.
+    if (!keepView) setView('chat');
     const req = ++openRequest.current;
     try {
-      window.localStorage.setItem('academy_active_conversation', String(id));
+      window.localStorage.setItem(ACTIVE_KEY, String(id));
     } catch {
       // Continue normally if browser storage is unavailable.
     }
@@ -1006,26 +1021,28 @@ export default function App() {
 
         setItems(list);
 
-        if (!list.length) {
+        let stored = null;
+        try {
+          stored = window.localStorage.getItem(ACTIVE_KEY);
+        } catch {
+          // Fall back to the most recent conversation if storage is unavailable.
+        }
+
+        // A deliberate blank New conversation is a page state too; do not
+        // replace it with the most recent saved conversation after reload.
+        if (!list.length || stored === 'new') {
           setActive(null);
           setMessages([]);
           return;
         }
 
-        let savedId = null;
-        try {
-          const stored = window.localStorage.getItem('academy_active_conversation');
-          savedId = stored ? Number(stored) : null;
-        } catch {
-          // Fall back to the most recent conversation if storage is unavailable.
-        }
-
+        const savedId = stored ? Number(stored) : null;
         const savedConversation = Number.isFinite(savedId)
           ? list.find((conversation) => Number(conversation.id) === savedId)
           : null;
-        const conversationToOpen = savedConversation || list[0];
 
-        await open(conversationToOpen.id);
+        // A deleted/invalid saved conversation falls back to the newest one.
+        await open((savedConversation || list[0]).id, { keepView: true });
       } catch (e) {
         if (!cancelled) setError(e.message);
       }
@@ -1069,7 +1086,7 @@ export default function App() {
     openRequest.current++; // ignore any in-flight open()
     setLoading(false);
     try {
-      window.localStorage.removeItem('academy_active_conversation');
+      window.localStorage.setItem(ACTIVE_KEY, 'new');
     } catch {
       // Ignore unavailable browser storage.
     }
@@ -1104,7 +1121,7 @@ export default function App() {
         id = c.id;
         openRequest.current++; // a new chat has nothing to load
         try {
-          window.localStorage.setItem('academy_active_conversation', String(id));
+          window.localStorage.setItem(ACTIVE_KEY, String(id));
         } catch {
           // Continue normally if browser storage is unavailable.
         }
@@ -1196,7 +1213,8 @@ export default function App() {
   function logout() {
     clearToken();
     try {
-      window.localStorage.removeItem('academy_active_conversation');
+      window.localStorage.removeItem(ACTIVE_KEY);
+      window.localStorage.removeItem(VIEW_KEY);
     } catch {
       // Ignore unavailable browser storage.
     }
